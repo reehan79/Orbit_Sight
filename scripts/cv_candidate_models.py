@@ -180,14 +180,22 @@ def selected_bbox_metrics(
 
 
 def benchmark_scorer(bundle, X: np.ndarray, ranks: np.ndarray, groups: list[np.ndarray], index_lookup: dict[int, int], limit: int = 500) -> tuple[float, float]:
+    selected_groups = groups[:limit]
+    if not selected_groups:
+        return float("nan"), float("nan")
+
+    first = np.asarray([index_lookup[int(i)] for i in selected_groups[0]], dtype=np.int64)
+    # Warm prediction path before measuring. This avoids charging one-time sklearn
+    # dispatch / allocation work to the first 40-ms observation.
+    for _ in range(3):
+        score_ranker(bundle, X[first], ranks[first])
+
     times = []
-    for group in groups[:limit]:
+    for group in selected_groups:
         local = np.asarray([index_lookup[int(i)] for i in group], dtype=np.int64)
         t0 = time.perf_counter()
         score_ranker(bundle, X[local], ranks[local])
         times.append((time.perf_counter() - t0) * 1000.0)
-    if not times:
-        return float("nan"), float("nan")
     arr = np.asarray(times)
     return float(np.mean(arr)), float(np.percentile(arr, 95))
 
@@ -197,7 +205,13 @@ def main() -> None:
     parser.add_argument("--table", required=True)
     parser.add_argument("--folds", required=True)
     parser.add_argument("--out", default="artifacts/candidate_model_cv.csv")
+    parser.add_argument(
+        "--models",
+        default="M0_raw_rank,M1_logistic,M2a_tree,M2b_extra_trees,M2_hist_gb",
+        help="Comma-separated rankers. Use the fast subset to avoid refitting HGB.",
+    )
     args = parser.parse_args()
+    model_names = [name.strip() for name in args.models.split(",") if name.strip()]
 
     data = load_table(Path(args.table))
     folds = json.loads(Path(args.folds).read_text(encoding="utf-8"))
@@ -206,6 +220,7 @@ def main() -> None:
     rows: list[dict[str, object]] = []
 
     print(f"rows={len(data['target'])} features={data['X'].shape[1]} positives={int(data['target'].sum())}")
+    print(f"models={','.join(model_names)}")
 
     for fold in folds:
         fold_id = int(fold["fold"])
@@ -217,7 +232,12 @@ def main() -> None:
         lookup = {int(global_idx): local_idx for local_idx, global_idx in enumerate(val_idx)}
 
         print(f"\nFold {fold_id}: train_rows={len(train_idx)} val_rows={len(val_idx)} val_groups={len(groups)}")
-        rankers = fit_rankers(data["X"][train_idx], data["target"][train_idx], data["rank"][train_idx])
+        rankers = fit_rankers(
+            data["X"][train_idx],
+            data["target"][train_idx],
+            data["rank"][train_idx],
+            model_names=model_names,
+        )
 
         positive_train = train_idx[data["target"][train_idx] == 1]
         bbox_model = fit_bbox_ridge(data["X"][positive_train], data["bbox"][positive_train])
