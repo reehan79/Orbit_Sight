@@ -12,6 +12,7 @@ dependencies = ["numpy>=1.26"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+ml = ["scikit-learn>=1.5"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
