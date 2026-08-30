@@ -1,0 +1,13 @@
+gt_windows=15290
+windows_current_differs=14886
+windows_boundary_tie=14792
+windows_gt_tie_affected=288
+top20_micro_argpartition=95.088935%
+top20_micro_deterministic=94.853518%
+top20_micro_delta_pp=-0.235417
+argpartition_p50_ms=0.088100
+argpartition_p95_ms=0.204145
+argpartition_p99_ms=0.456400
+deterministic_p50_ms=0.237600
+deterministic_p95_ms=8.778530
+deterministic_p99_ms=13.758765
