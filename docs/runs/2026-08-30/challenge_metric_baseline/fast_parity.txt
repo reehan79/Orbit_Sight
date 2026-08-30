@@ -1,0 +1,2 @@
+parity_failures=0
+speedup_p50=0.999
