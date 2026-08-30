@@ -1,0 +1,6 @@
+{
+  "window_us": 40000,
+  "start_rule": "np.arange(int(ev_t[0]), int(ev_t[-1]), WINDOW_US)",
+  "interval": "half-open [ws, ws+WINDOW_US)",
+  "source": "OrbitSight_DataLoader/visualize_dataset.py"
+}
