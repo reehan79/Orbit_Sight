@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import math
+from collections import defaultdict
+
 import numpy as np
 
 LOCAL_GEOMETRY_NAMES = (
@@ -37,6 +40,54 @@ def refine_c1_centroid(events: np.ndarray, cx: float, cy: float, cell: float) ->
     if len(roi) == 0:
         return cx, cy
     return float(np.mean(roi[:, 0])), float(np.mean(roi[:, 1]))
+
+
+def refine_c4_median(events: np.ndarray, cx: float, cy: float, cell: float) -> tuple[float, float]:
+    mask = roi_mask(events, cx, cy, cell)
+    roi = events[mask]
+    if len(roi) == 0:
+        return cx, cy
+    return float(np.median(roi[:, 0])), float(np.median(roi[:, 1]))
+
+
+def refine_c5_soft_background_centroid(
+    current: np.ndarray,
+    prior: np.ndarray,
+    cx: float,
+    cy: float,
+    cell: float,
+) -> tuple[float, float]:
+    mask = roi_mask(current, cx, cy, cell)
+    roi = current[mask]
+    if len(roi) == 0:
+        return cx, cy
+    prior_counts: dict[tuple[int, int], int] = defaultdict(int)
+    if len(prior) > 0:
+        px = prior[:, 0].astype(np.int64)
+        py = prior[:, 1].astype(np.int64)
+        for x_val, y_val in zip(px, py, strict=True):
+            prior_counts[(int(x_val), int(y_val))] += 1
+    weights = np.empty(len(roi), dtype=np.float64)
+    for i, event in enumerate(roi):
+        key = (int(event[0]), int(event[1]))
+        prior_n = prior_counts.get(key, 0)
+        weights[i] = 1.0 / math.sqrt(1.0 + prior_n)
+    wsum = float(weights.sum())
+    if wsum <= 0.0:
+        return cx, cy
+    return float(np.sum(roi[:, 0] * weights) / wsum), float(np.sum(roi[:, 1] * weights) / wsum)
+
+
+def local_extent_from_roi(events: np.ndarray, cx: float, cy: float, cell: float) -> tuple[float, float]:
+    mask = roi_mask(events, cx, cy, cell)
+    roi = events[mask]
+    if len(roi) == 0:
+        return 1.0, 1.0
+    x = roi[:, 0].astype(np.float64)
+    y = roi[:, 1].astype(np.float64)
+    width = max(float(np.percentile(x, 90) - np.percentile(x, 10)), 1.0)
+    height = max(float(np.percentile(y, 90) - np.percentile(y, 10)), 1.0)
+    return width, height
 
 
 def extract_local_geometry_features(
