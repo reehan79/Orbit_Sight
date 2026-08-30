@@ -149,7 +149,7 @@ def main() -> None:
                             "centre_error": err,
                             "iou_oracle_size": iou,
                             "iou50": float(iou >= 0.5),
-                            "compute_ms": elapsed_ms,
+                            "combined_localization_block_ms": elapsed_ms,
                         }
                     )
                     timings[method].append(elapsed_ms)
@@ -162,7 +162,7 @@ def main() -> None:
         for (group_val, method), items in sorted(grouped_vals.items()):
             errs = [float(r["centre_error"]) for r in items]
             ious = [float(r["iou_oracle_size"]) for r in items]
-            comp = [float(r["compute_ms"]) for r in items]
+            comp = [float(r["combined_localization_block_ms"]) for r in items]
             stats_e = summarize(errs)
             stats_c = summarize(comp)
             out.append(
@@ -175,8 +175,8 @@ def main() -> None:
                     "centre_error_p90": stats_e["p90"],
                     "iou_oracle_mean": float(np.mean(ious)),
                     "iou50_pct": 100.0 * float(np.mean([float(r["iou50"]) for r in items])),
-                    "compute_p50_ms": float(np.percentile(comp, 50)),
-                    "compute_p95_ms": float(np.percentile(comp, 95)),
+                    "combined_localization_block_p50_ms": float(np.percentile(comp, 50)),
+                    "combined_localization_block_p95_ms": float(np.percentile(comp, 95)),
                 }
             )
         return out
@@ -202,22 +202,25 @@ def main() -> None:
         "",
         "Training data only. GT used for evaluation only, not inside estimators.",
         "",
+        "Timing note: `combined_localization_block_*` columns measure the full C0–C3",
+        "`estimate_all()` block once per GT-compatible window, not per-method latency.",
+        "",
         "## By sensor",
         "",
-        "| sensor | method | n | centre err mean | median | p90 | IoU oracle mean | IoU>=0.5 % | compute p50 ms | p95 ms |",
-        "|--------|--------|---:|----------------:|-------:|----:|----------------:|------------:|---------------:|-------:|",
+        "| sensor | method | n | centre err mean | median | p90 | IoU oracle mean | IoU>=0.5 % | combined block p50 ms | p95 ms |",
+        "|--------|--------|---:|----------------:|-------:|----:|----------------:|------------:|----------------------:|-------:|",
     ]
     for row in sensor_rows:
         lines.append(
             f"| {row['sensor']} | {row['method']} | {row['n']} | {row['centre_error_mean']:.3f} | "
             f"{row['centre_error_median']:.3f} | {row['centre_error_p90']:.3f} | {row['iou_oracle_mean']:.4f} | "
-            f"{row['iou50_pct']:.2f} | {row['compute_p50_ms']:.4f} | {row['compute_p95_ms']:.4f} |"
+            f"{row['iou50_pct']:.2f} | {row['combined_localization_block_p50_ms']:.4f} | {row['combined_localization_block_p95_ms']:.4f} |"
         )
-    lines.extend(["", "## By sequence (macro over methods)", ""])
+    lines.extend(["", "## By sequence and method", ""])
     for row in sequence_rows:
         lines.append(
             f"- `{row['sequence']}` {row['method']}: err_mean={row['centre_error_mean']:.3f}, "
-            f"iou50={row['iou50_pct']:.2f}%, compute_p95={row['compute_p95_ms']:.4f} ms"
+            f"iou50={row['iou50_pct']:.2f}%, combined_block_p95={row['combined_localization_block_p95_ms']:.4f} ms"
         )
     lines.extend(["", "## Fold variation (validation sequences only)", ""])
     for row in fold_rows:

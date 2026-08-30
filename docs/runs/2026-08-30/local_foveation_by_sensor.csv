@@ -1,4 +1,4 @@
-sensor,method,n,centre_error_mean,centre_error_median,centre_error_p90,iou_oracle_mean,iou50_pct,compute_p50_ms,compute_p95_ms
+sensor,method,n,centre_error_mean,centre_error_median,centre_error_p90,iou_oracle_mean,iou50_pct,combined_localization_block_p50_ms,combined_localization_block_p95_ms
 DAVIS,C0_grid,9936,3.7864520343318873,3.605551275463989,6.082762530298219,0.41381966128517517,40.28784219001611,0.0908,0.255725
 DAVIS,C1_centroid,9936,2.455258561866388,1.8913385759027836,4.817501027677183,0.5579444497312716,57.33695652173913,0.0908,0.255725
 DAVIS,C2_recent_centroid,9936,2.4706538640528177,1.9013594829958929,4.863574412352017,0.5556221344433964,57.31682769726248,0.0908,0.255725
