@@ -11,6 +11,7 @@ from time import perf_counter_ns
 
 import numpy as np
 
+from orbitsight.evaluation.detection_aggregate import aggregate_detection_metrics, failure_buckets
 from orbitsight.features import (
     FEATURE_NAMES,
     LOCAL_GEOMETRY_NAMES,
@@ -283,8 +284,10 @@ def evaluate_fold(
                     sel_rank = candidates.index(selected) + 1
                     feat_idx = sel_rank - 1
                     feat15 = features[feat_idx]
-                    local18 = extract_local_geometry_features(current, cx, cy, cell, width, height)
-                    size_X = np.concatenate([feat15, local18])
+                    size_X = feat15
+                    if config.size != "S0":
+                        local18 = extract_local_geometry_features(current, cx, cy, cell, width, height)
+                        size_X = np.concatenate([feat15, local18])
                     pred_w, pred_h = predict_size(
                         config.size, sensor, sensor_medians, size_ridge, size_trees, size_X, cell
                     )
@@ -354,9 +357,9 @@ def summarize_gt_records(records: list[dict], window_times: list[float]) -> dict
         "centre_error_p90": float(np.percentile(centre, 90)) if len(centre) else float("nan"),
         "mean_iou": float(np.mean(ious)),
         "median_iou": float(np.median(ious)),
-        "micro_iou50_pct": 100.0 * float(np.mean(ious >= 0.5)),
-        "micro_iou75_pct": 100.0 * float(np.mean(ious >= 0.75)),
-        "macro_iou50_pct": 100.0 * float(np.mean([np.mean(v) for v in by_seq.values()])),
+        "pooled_micro_iou50_pct": 100.0 * float(np.mean(ious >= 0.5)),
+        "pooled_micro_iou75_pct": 100.0 * float(np.mean(ious >= 0.75)),
+        "sequence_macro_iou50_pct": 100.0 * float(np.mean([np.mean(v) for v in by_seq.values()])),
     }
     if window_times:
         wt = np.asarray(window_times, dtype=np.float64)
@@ -364,23 +367,6 @@ def summarize_gt_records(records: list[dict], window_times: list[float]) -> dict
         out["inference_p95_ms"] = float(np.percentile(wt, 95))
         out["inference_p99_ms"] = float(np.percentile(wt, 99))
     return out
-
-
-def failure_buckets(details: list[dict]) -> list[dict]:
-    buckets: dict[str, int] = defaultdict(int)
-    for row in details:
-        if not row["proposal_hit"]:
-            buckets["proposal_miss"] += 1
-        elif not row["ranker_hit"]:
-            buckets["ranking_error"] += 1
-        elif float(row["oracle_iou"]) < 0.5:
-            buckets["centre_error_too_large"] += 1
-        elif float(row["iou"]) < 0.5:
-            buckets["box_size_error"] += 1
-        else:
-            buckets["other"] += 1
-    total = max(sum(buckets.values()), 1)
-    return [{"bucket": k, "count": v, "pct": 100.0 * v / total} for k, v in sorted(buckets.items())]
 
 
 def main() -> None:
@@ -444,16 +430,37 @@ def main() -> None:
     ablation_labels = {c.label for c in ablation_configs}
     ablation_summary = []
     for label in sorted(ablation_labels):
-        rows = [r for r in all_fold_rows if r["config"] == label]
-        if not rows:
+        details = all_details.get(label, [])
+        if not details:
             continue
-        agg = {k: float(np.mean([float(r[k]) for r in rows if k in r])) for k in rows[0] if k not in ("fold", "config")}
+        agg = aggregate_detection_metrics(details)
         agg["config"] = label
+        fold_rows_for_label = [r for r in all_fold_rows if r["config"] == label]
+        if fold_rows_for_label:
+            for key in (
+                "proposal_contains_gt_pct",
+                "ranker_selected_gt_compatible_pct",
+                "inference_p50_ms",
+                "inference_p95_ms",
+                "inference_p99_ms",
+            ):
+                vals = [float(r[key]) for r in fold_rows_for_label if key in r]
+                if vals:
+                    agg[key] = float(np.mean(vals))
         ablation_summary.append(agg)
     write_csv("ablation_summary.csv", ablation_summary)
 
-    best_label = max(ablation_summary, key=lambda r: float(r["micro_iou50_pct"]))["config"]
-    best_label = max(ablation_summary, key=lambda r: float(r["micro_iou50_pct"]))["config"]
+    main_summary = []
+    for label in [c.label for c in main_configs]:
+        details = all_details.get(label, [])
+        if not details:
+            continue
+        agg = aggregate_detection_metrics(details)
+        agg["config"] = label
+        main_summary.append(agg)
+    write_csv("main_summary.csv", main_summary)
+
+    best_label = max(ablation_summary, key=lambda r: float(r["pooled_micro_iou50_pct"]))["config"]
     best_details = all_details[best_label]
     bucket_rows = failure_buckets(best_details)
     write_csv("failure_buckets.csv", bucket_rows)
@@ -469,32 +476,48 @@ def main() -> None:
     ]
     for label in [c.label for c in main_configs]:
         rows = [r for r in all_fold_rows if r["config"] == label]
-        if not rows:
+        details = all_details.get(label, [])
+        if not rows or not details:
             continue
-        micro50 = float(np.mean([float(r["micro_iou50_pct"]) for r in rows]))
+        pooled = aggregate_detection_metrics(details)
         lines.append(f"### {label}")
-        lines.append(f"- cross-fold mean micro IoU>=0.5: {micro50:.3f}%")
+        lines.append(
+            f"- pooled micro IoU>=0.5: {pooled['pooled_micro_iou50_pct']:.3f}% "
+            f"(n_gt={int(pooled['n_gt'])})"
+        )
+        lines.append(
+            f"- sequence macro IoU>=0.5: {pooled['sequence_macro_iou50_pct']:.3f}% "
+            f"fold mean IoU>=0.5: {pooled['fold_mean_iou50_pct']:.3f}%"
+        )
         for r in rows:
             lines.append(
                 f"- fold {int(r['fold'])}: proposal={r['proposal_contains_gt_pct']:.2f}% "
                 f"ranker={r['ranker_selected_gt_compatible_pct']:.2f}% "
-                f"micro50={r['micro_iou50_pct']:.2f}% macro50={r['macro_iou50_pct']:.2f}% "
+                f"pooled50={r['pooled_micro_iou50_pct']:.2f}% seq_macro50={r['sequence_macro_iou50_pct']:.2f}% "
                 f"mean_iou={r['mean_iou']:.4f} infer_p95={r.get('inference_p95_ms', float('nan')):.3f}ms"
             )
         lines.append("")
 
     lines.extend(["## Ablation", ""])
-    lines.append("| config | micro IoU>=0.5 % | macro IoU>=0.5 % | mean IoU | ranker hit % |")
-    lines.append("|--------|-----------------:|-----------------:|---------:|-------------:|")
+    lines.append(
+        "| config | pooled micro IoU>=0.5 % | sequence macro IoU>=0.5 % | fold mean IoU>=0.5 % | n_gt | mean IoU | ranker hit % |"
+    )
+    lines.append(
+        "|--------|-------------------------:|---------------------------:|---------------------:|-----:|---------:|-------------:|"
+    )
     for row in ablation_summary:
         lines.append(
-            f"| {row['config']} | {row['micro_iou50_pct']:.3f} | {row['macro_iou50_pct']:.3f} | "
-            f"{row['mean_iou']:.4f} | {row['ranker_selected_gt_compatible_pct']:.2f} |"
+            f"| {row['config']} | {row['pooled_micro_iou50_pct']:.3f} | {row['sequence_macro_iou50_pct']:.3f} | "
+            f"{row['fold_mean_iou50_pct']:.3f} | {int(row['n_gt'])} | "
+            f"{row['mean_iou']:.4f} | {row.get('ranker_selected_gt_compatible_pct', float('nan')):.2f} |"
         )
 
     lines.extend(["", f"## Failure buckets (config={best_label})", ""])
     for row in bucket_rows:
-        lines.append(f"- {row['bucket']}: {row['count']} ({row['pct']:.2f}%)")
+        lines.append(
+            f"- {row['bucket']}: {row['count']} "
+            f"({row['pct_all_gt']:.2f}% of all GT, {row['pct_failures_only']:.2f}% of failures)"
+        )
 
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"best_ablation={best_label} md={md_path} out_dir={out_dir}")
