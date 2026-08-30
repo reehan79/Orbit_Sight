@@ -92,6 +92,7 @@ def ranking_metrics(data: dict[str, np.ndarray], groups: list[np.ndarray], score
         positive = np.flatnonzero(labels == 1)
         if len(positive) == 0:
             first_rank = None
+            reciprocal_ranks.append(0.0)
         else:
             first_rank = int(positive[0]) + 1
             reciprocal_ranks.append(1.0 / first_rank)
@@ -107,7 +108,7 @@ def ranking_metrics(data: dict[str, np.ndarray], groups: list[np.ndarray], score
     for k in TOPKS:
         seq_values = [h[k][0] / max(h[k][1], 1) for h in per_sequence_hits.values()]
         result[f"top{k}_macro"] = float(np.mean(seq_values)) if seq_values else float("nan")
-    result["mrr"] = float(np.mean(reciprocal_ranks)) if reciprocal_ranks else 0.0
+    result["mrr"] = float(np.mean(reciprocal_ranks)) if valid_groups else 0.0
     result["groups"] = float(valid_groups)
     return result
 

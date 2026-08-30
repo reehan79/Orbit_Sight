@@ -1,0 +1,4 @@
+source,top20_micro,top20_macro,top1_micro,top1_macro,targets
+historical,0.95147790,0.95291389,0.70749411,0.54467581,15292
+rerun,0.95088935,0.94317528,0.71069840,0.54746900,15292
+expected_approx,0.95148,0.95291,,,

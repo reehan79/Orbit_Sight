@@ -15,7 +15,7 @@ def test_minimal_rankers_fit_and_score():
     ranks = np.tile(np.arange(1, 21), 4)
 
     models = fit_rankers(X, y, ranks)
-    assert set(models) == {"M0_raw_rank", "M1_logistic", "M2_hist_gb"}
+    assert set(models) == {"M0_raw_rank", "M1_logistic", "M2a_tree", "M2b_extra_trees", "M2_hist_gb"}
     for bundle in models.values():
         scores = score_ranker(bundle, X, ranks)
         assert scores.shape == (80,)

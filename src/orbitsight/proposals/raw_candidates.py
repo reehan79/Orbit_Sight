@@ -56,12 +56,8 @@ class RawGridProposer:
         if len(occupied) == 0:
             return []
         k = min(self.top_k, len(occupied))
-        if len(occupied) > k:
-            local = np.argpartition(counts[occupied], -k)[-k:]
-            ranked = occupied[local]
-        else:
-            ranked = occupied
-        ranked = ranked[np.argsort(counts[ranked])[::-1]]
+        order = np.lexsort((occupied, -counts[occupied]))
+        ranked = occupied[order[:k]]
         max_count = max(int(counts[ranked[0]]), 1)
         out: list[Candidate] = []
         for gid in ranked:
