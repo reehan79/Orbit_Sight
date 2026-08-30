@@ -12,6 +12,7 @@ from time import perf_counter_ns
 import numpy as np
 
 from orbitsight.evaluation.detection_aggregate import aggregate_detection_metrics
+from orbitsight.evaluation.gt_assignment import compatible, nearest_compatible_gt
 from orbitsight.features import (
     FEATURE_NAMES,
     extract_candidate_features,
@@ -79,11 +80,7 @@ def load_table(path: Path) -> dict[str, np.ndarray]:
     }
 
 
-def compatible(candidate: Candidate, gt: Detection, margin: float) -> bool:
-    return (
-        abs(candidate.cx - gt.cx) <= gt.width / 2.0 + margin
-        and abs(candidate.cy - gt.cy) <= gt.height / 2.0 + margin
-    )
+
 
 
 def iou_box(cx: float, cy: float, w: float, h: float, gt: Detection) -> float:
@@ -209,11 +206,11 @@ def build_centre_residual_training(
             c1_dx = (c1_cx - raw_cx) / cell
             c1_dy = (c1_cy - raw_cy) / cell
             feat = np.concatenate([feat15, local18, np.array([c1_dx, c1_dy], dtype=np.float32)])
-            for gt in gts:
-                if not compatible(selected, gt, float(cell)):
-                    continue
-                y_rows.append([(gt.cx - c1_cx) / cell, (gt.cy - c1_cy) / cell])
-                X_rows.append(feat)
+            gt = nearest_compatible_gt(selected, gts, float(cell))
+            if gt is None:
+                continue
+            y_rows.append([(gt.cx - c1_cx) / cell, (gt.cy - c1_cy) / cell])
+            X_rows.append(feat)
     if not X_rows:
         return np.empty((0, 35), dtype=np.float32), np.empty((0, 2), dtype=np.float32)
     return np.asarray(X_rows, dtype=np.float32), np.asarray(y_rows, dtype=np.float32)
@@ -259,11 +256,11 @@ def build_s4_training(
             feat = np.concatenate(
                 [feat15, local18, np.array([math.log(max(s3_w / cell, 1e-6)), math.log(max(s3_h / cell, 1e-6))], dtype=np.float32)]
             )
-            for gt in gts:
-                if not compatible(selected, gt, float(cell)):
-                    continue
-                y_rows.append([math.log(gt.width / max(s3_w, 1e-6)), math.log(gt.height / max(s3_h, 1e-6))])
-                X_rows.append(feat)
+            gt = nearest_compatible_gt(selected, gts, float(cell))
+            if gt is None:
+                continue
+            y_rows.append([math.log(gt.width / max(s3_w, 1e-6)), math.log(gt.height / max(s3_h, 1e-6))])
+            X_rows.append(feat)
     if not X_rows:
         return np.empty((0, 35), dtype=np.float32), np.empty((0, 2), dtype=np.float32)
     return np.asarray(X_rows, dtype=np.float32), np.asarray(y_rows, dtype=np.float32)
@@ -303,8 +300,10 @@ def refine_centre(
 def predict_size(
     size_mode: str,
     cell: float,
-    cx: float,
-    cy: float,
+    output_cx: float,
+    output_cy: float,
+    feature_cx: float,
+    feature_cy: float,
     current: np.ndarray,
     feat15: np.ndarray,
     width: int,
@@ -312,16 +311,18 @@ def predict_size(
     size_trees,
     size_extent_trees,
 ) -> tuple[float, float]:
+    # S3 is intrinsically centre-dependent (uses output centre ROI).
     if size_mode == "S3":
-        return local_extent_from_roi(current, cx, cy, cell)
+        return local_extent_from_roi(current, output_cx, output_cy, cell)
+    # S2/S4 always extract features around C1 (feature_cx/cy) to match training.
     if size_mode == "S2":
-        local18 = extract_local_geometry_features(current, cx, cy, cell, width, height)
+        local18 = extract_local_geometry_features(current, feature_cx, feature_cy, cell, width, height)
         size_X = np.concatenate([feat15, local18])
         log_wh = size_trees.predict(size_X.reshape(1, -1))[0]
         return math.exp(float(log_wh[0])) * cell, math.exp(float(log_wh[1])) * cell
     if size_mode == "S4":
-        s3_w, s3_h = local_extent_from_roi(current, cx, cy, cell)
-        local18 = extract_local_geometry_features(current, cx, cy, cell, width, height)
+        s3_w, s3_h = local_extent_from_roi(current, feature_cx, feature_cy, cell)
+        local18 = extract_local_geometry_features(current, feature_cx, feature_cy, cell, width, height)
         feat = np.concatenate(
             [feat15, local18, np.array([math.log(max(s3_w / cell, 1e-6)), math.log(max(s3_h / cell, 1e-6))], dtype=np.float32)]
         )
@@ -395,6 +396,7 @@ def evaluate_fold(
                     selected = candidates[int(np.argmax(scores))]
                     sel_idx = candidates.index(selected)
                     feat15 = features[sel_idx]
+                    c1_cx, c1_cy = refine_c1_centroid(current, selected.cx, selected.cy, cell)
                     cx, cy = refine_centre(
                         config.centre,
                         current,
@@ -412,6 +414,8 @@ def evaluate_fold(
                         cell,
                         cx,
                         cy,
+                        c1_cx,
+                        c1_cy,
                         current,
                         feat15,
                         width,
@@ -651,12 +655,17 @@ def main() -> None:
     oracle_summary = summarize_oracle(oracle_rows)
     write_csv(out_dir / "oracle_decomposition.csv", oracle_summary)
 
-    best_configs = sorted(summary_rows, key=lambda r: float(r["pooled_micro_iou50_pct"]), reverse=True)[:3]
-    cross_configs = [all_configs[r["config"]] for r in best_configs]
+    # Predefined cross-sensor configs (no selection on primary-CV validation).
+    cross_configs = [
+        SuiteConfig("C1_CENTROID__S2", "C1_CENTROID", "S2"),
+        SuiteConfig("C4_MEDIAN__S2", "C4_MEDIAN", "S2"),
+        SuiteConfig("C7_EXTRATREES_RESIDUAL__S2", "C7_EXTRATREES_RESIDUAL", "S2"),
+    ]
     cross_folds = json.loads(Path(args.cross_sensor_folds).read_text(encoding="utf-8"))
     cross_details, _, cross_fold_rows = run_cv(split_dir, table, cross_folds, cross_configs, collect_oracle=False)
     cross_summary: list[dict] = []
-    for label, details in cross_details.items():
+    for label in [c.label for c in cross_configs]:
+        details = cross_details[label]
         agg = aggregate_detection_metrics(details)
         agg["config"] = label
         cross_summary.append(agg)
@@ -701,14 +710,34 @@ def main() -> None:
                 f"mean IoU={row['mean_iou']:.4f} (n_gt={int(row['n_gt'])})"
             )
 
-    lines.extend(["", "## Part 4 — Cross-sensor stress (top matrix configs)", ""])
+    lines.extend(
+        [
+            "",
+            "## Part 4 — Cross-sensor stress (predefined configs)",
+            "",
+            "Fixed configs (no primary-CV selection): C1_CENTROID__S2, C4_MEDIAN__S2, C7_EXTRATREES_RESIDUAL__S2.",
+            "",
+        ]
+    )
     for row in cross_summary:
         lines.append(
             f"- {row['config']}: pooled micro IoU>=0.5={row['pooled_micro_iou50_pct']:.3f}% "
             f"sequence macro={row['sequence_macro_iou50_pct']:.3f}% n_gt={int(row['n_gt'])}"
         )
 
-    lines.extend(["", f"CSVs: `{out_dir}/`", ""])
+    lines.extend(
+        [
+            "",
+            "## Methodology notes",
+            "",
+            "- S2/S4 size features always extracted around C1 centre (train and inference).",
+            "- S3 local extent is centre-dependent (uses the output box centre ROI).",
+            "- Residual training assigns one GT per candidate: nearest compatible by Euclidean centre distance.",
+            "",
+            f"CSVs: `{out_dir}/`",
+            "",
+        ]
+    )
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"report={md_path} out_dir={out_dir}")
 

@@ -1,0 +1,8 @@
+metric,value
+delta_N1_vs_B_CURRENT_pooled_iou50_pp,-6.872874705728492
+delta_N2_vs_B_CURRENT_pooled_iou50_pp,-2.563431859795976
+delta_N1_vs_B_CURRENT_sequence_macro_iou50_pp,-8.703178725611338
+delta_N2_vs_B_CURRENT_sequence_macro_iou50_pp,-1.3216066466313166
+CRITERION_A,0.0
+CRITERION_B,0.0
+CRITERION_C,0.0
