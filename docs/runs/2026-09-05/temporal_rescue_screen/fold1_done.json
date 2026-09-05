@@ -1,0 +1,45 @@
+{
+  "fold": 1,
+  "done": true,
+  "thr_d2": 0.6330060940344227,
+  "thr_rescue": 0.999999992323262,
+  "mismatches": 0,
+  "champ": {
+    "precision": 0.3092848180677541,
+    "recall": 0.2045643153526971,
+    "f1": 0.24625374625374627,
+    "ap50": 0.10671600731724294,
+    "tp": 493,
+    "fp": 1101,
+    "fn": 1917,
+    "mean_matched_iou": 0.6160280212687038,
+    "sequence_macro_f1": 0.2181384426504255,
+    "sequence_macro_recall": 0.22312382126580968,
+    "empty_window_fpr": 0.006747550768831506
+  },
+  "rescue": {
+    "precision": 0.3092848180677541,
+    "recall": 0.2045643153526971,
+    "f1": 0.24625374625374627,
+    "ap50": 0.10671600731724294,
+    "tp": 493,
+    "fp": 1101,
+    "fn": 1917,
+    "mean_matched_iou": 0.6160280212687038,
+    "sequence_macro_f1": 0.2181384426504255,
+    "sequence_macro_recall": 0.22312382126580968,
+    "empty_window_fpr": 0.006747550768831506
+  },
+  "accounting": {
+    "d2_rejected_windows": 16227,
+    "rescue_attempts": 16227,
+    "rescue_emissions": 0,
+    "rescue_true_positives": 0,
+    "rescue_false_positives": 0,
+    "rescue_precision": 0.0,
+    "new_tp_gained": 0,
+    "new_fp_introduced": 0,
+    "rescue_tp_top20_present": 0,
+    "rescue_tp_top1_geometry_ok": 0
+  }
+}
