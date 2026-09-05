@@ -571,6 +571,23 @@ def main():
     parser.add_argument("--table", type=Path, default=Path("artifacts/candidate_table.csv"))
     parser.add_argument("--folds", type=Path, default=Path("sequence_folds.json"))
     parser.add_argument(
+        "--fold-ids",
+        type=str,
+        default="all",
+        help="Comma/range fold subset, e.g. '0,2' or '1-3'. Default: all.",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        default=True,
+        help="Reuse completed fold checkpoints (default True).",
+    )
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Ignore existing fold checkpoints and recompute.",
+    )
+    parser.add_argument(
         "--out-dir",
         type=Path,
         default=Path("docs/runs/2026-08-31/challenge_aligned_confidence"),
@@ -583,17 +600,25 @@ def main():
     )
     args = parser.parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
+    if args.no_resume:
+        args.resume = False
 
     cache = load_cache(args.cache)
     table = load_table(args.table)
     folds = json.loads(args.folds.read_text(encoding="utf-8"))
+    from orbitsight.sprint import parse_fold_ids
+
+    fold_filter = parse_fold_ids(args.fold_ids, n_folds=len(folds))
+    if fold_filter is not None:
+        folds = [f for f in folds if int(f["fold"]) in set(fold_filter)]
+        print(f"fold_ids filter={fold_filter}", flush=True)
 
     # Resume from per-fold checkpoints if present.
-    compare_fold_rows = read_csv_rows(args.out_dir / "compare_by_fold.csv")
-    compare_seq_rows = read_csv_rows(args.out_dir / "compare_by_sequence.csv")
-    threshold_rows = read_csv_rows(args.out_dir / "threshold_stability.csv")
-    ceiling_rows = read_csv_rows(args.out_dir / "ceiling_summary.csv")
-    gate_stats_rows = read_csv_rows(args.out_dir / "oof_gate_stats.csv")
+    compare_fold_rows = read_csv_rows(args.out_dir / "compare_by_fold.csv") if args.resume else []
+    compare_seq_rows = read_csv_rows(args.out_dir / "compare_by_sequence.csv") if args.resume else []
+    threshold_rows = read_csv_rows(args.out_dir / "threshold_stability.csv") if args.resume else []
+    ceiling_rows = read_csv_rows(args.out_dir / "ceiling_summary.csv") if args.resume else []
+    gate_stats_rows = read_csv_rows(args.out_dir / "oof_gate_stats.csv") if args.resume else []
     # Cast numeric fields that CSV read as strings for later aggregation.
     for rows in (compare_fold_rows, compare_seq_rows, ceiling_rows):
         for r in rows:

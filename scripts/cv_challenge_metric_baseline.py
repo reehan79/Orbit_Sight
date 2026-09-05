@@ -70,6 +70,13 @@ def write_csv(path: Path, rows: list[dict]) -> None:
         w.writerows(rows)
 
 
+def read_csv_rows(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    with path.open(encoding="utf-8", newline="") as f:
+        return list(csv.DictReader(f))
+
+
 def load_cache(path: Path) -> dict[str, np.ndarray]:
     data = np.load(path, allow_pickle=True)
     return {k: data[k] for k in data.files}
@@ -677,14 +684,35 @@ def main():
     parser.add_argument("--cache", type=Path, default=Path("artifacts/all_window_candidates.npz"))
     parser.add_argument("--table", type=Path, default=Path("artifacts/candidate_table.csv"))
     parser.add_argument("--folds", type=Path, default=Path("sequence_folds.json"))
+    parser.add_argument(
+        "--fold-ids",
+        type=str,
+        default="all",
+        help="Comma/range fold subset, e.g. '0,2' or '1-3'. Default: all.",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        default=True,
+        help="Reuse completed fold checkpoints when present.",
+    )
+    parser.add_argument("--no-resume", action="store_true")
     parser.add_argument("--out-dir", type=Path, default=Path("docs/runs/2026-08-30/challenge_metric_baseline"))
     parser.add_argument("--h1-gate", type=Path, default=Path("docs/runs/2026-08-30/challenge_metric_baseline/h1_gate.txt"))
     args = parser.parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
+    if args.no_resume:
+        args.resume = False
 
     cache = load_cache(args.cache)
     table = load_table(args.table)
     folds = json.loads(args.folds.read_text(encoding="utf-8"))
+    from orbitsight.sprint import parse_fold_ids
+
+    fold_filter = parse_fold_ids(args.fold_ids, n_folds=len(folds))
+    if fold_filter is not None:
+        folds = [f for f in folds if int(f["fold"]) in set(fold_filter)]
+        print(f"fold_ids filter={fold_filter}", flush=True)
 
     run_h1 = False
     if args.h1_gate.exists():
@@ -695,13 +723,40 @@ def main():
     latency_rows = []
     latency_raw: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
     diag_rows = []
-    fold_rows = []
-    seq_rows = []
+    fold_rows = read_csv_rows(args.out_dir / "challenge_by_fold.csv") if args.resume else []
+    seq_rows = read_csv_rows(args.out_dir / "challenge_by_sequence.csv") if args.resume else []
     sensor_rows = []
     parity_ok = True
+    done_folds = {int(float(r["fold"])) for r in fold_rows} if fold_rows else set()
+    if fold_rows:
+        for r in fold_rows:
+            r["fold"] = int(float(r["fold"]))
+            for k, v in list(r.items()):
+                if k in ("tp", "fp", "fn"):
+                    r[k] = int(float(v))
+                elif k not in ("policy",):
+                    try:
+                        r[k] = float(v)
+                    except (TypeError, ValueError):
+                        pass
+    if seq_rows:
+        for r in seq_rows:
+            r["fold"] = int(float(r["fold"]))
+            for k, v in list(r.items()):
+                if k in ("tp", "fp", "fn"):
+                    r[k] = int(float(v))
+                elif k not in ("policy", "sequence", "sensor"):
+                    try:
+                        r[k] = float(v)
+                    except (TypeError, ValueError):
+                        pass
+    print(f"Resume: done_folds={sorted(done_folds)}", flush=True)
 
     for fold in folds:
         fold_id = int(fold["fold"])
+        if fold_id in done_folds:
+            print(f"Challenge fold {fold_id}: skip (already complete)", flush=True)
+            continue
         train_seqs = list(fold["train"])
         val_seqs = list(fold["validation"])
         print(f"Challenge fold {fold_id}: threshold OOF...", flush=True)
