@@ -20,11 +20,11 @@ from sklearn.model_selection import KFold
 
 from orbitsight.evaluation.gt_assignment import compatible
 from orbitsight.evaluation.tii_style import (
-    TIIMetrics,
     aggregate_tii,
     evaluate_dirs_tii,
     load_tii_gt,
     match_and_score,
+    pooled_percentiles,
     write_tii_prediction_file,
 )
 from orbitsight.features.candidate_features_fast import extract_candidate_features_fast
@@ -693,6 +693,7 @@ def main():
 
     policy_summaries = []
     latency_rows = []
+    latency_raw: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
     diag_rows = []
     fold_rows = []
     seq_rows = []
@@ -764,6 +765,7 @@ def main():
                 onnx_session=onnx_sess,
             )
             for sensor, vals in latency.items():
+                latency_raw[policy][sensor].extend(vals)
                 latency_rows.append(
                     {
                         "fold": fold_id,
@@ -773,6 +775,7 @@ def main():
                         "p95_ms": pct(vals, 95),
                         "p99_ms": pct(vals, 99),
                         "n": len(vals),
+                        "aggregation": "per_fold",
                     }
                 )
 
@@ -882,7 +885,6 @@ def main():
         )
     write_csv(args.out_dir / "challenge_policy_summary.csv", policy_summaries)
 
-    # Per-sensor pooled from sequence rows
     for policy in all_policies:
         for sensor in ("DAVIS", "DVX", "EVK4"):
             rows = [r for r in seq_rows if r["policy"] == policy and r["sensor"] == sensor]
@@ -909,20 +911,76 @@ def main():
             )
     write_csv(args.out_dir / "challenge_by_sensor.csv", sensor_rows)
 
+    for policy in all_policies:
+        for sensor, vals in latency_raw[policy].items():
+            pooled = pooled_percentiles({sensor: vals})
+            latency_rows.append(
+                {
+                    "fold": "pooled",
+                    "policy": policy,
+                    "sensor": sensor,
+                    "p50_ms": pooled["p50_ms"],
+                    "p95_ms": pooled["p95_ms"],
+                    "p99_ms": pooled["p99_ms"],
+                    "n": pooled["n"],
+                    "aggregation": "pooled_samples",
+                }
+            )
+    write_csv(args.out_dir / "challenge_latency.csv", latency_rows)
+
+    # Latency criteria from pooled samples (not mean of fold p95)
     criteria = []
     for policy in all_policies:
-        all_p95 = [r["p95_ms"] for r in latency_rows if r["policy"] == policy and r["sensor"] == "ALL"]
-        overall_p95 = float(np.mean(all_p95)) if all_p95 else float("nan")
-        lat_a = bool(overall_p95 <= 40.0)
-        criteria.append({"policy": policy, "criterion": "LATENCY_A", "p95_ms": overall_p95, "pass": lat_a})
+        pooled_all = pooled_percentiles(dict(latency_raw[policy]))
+        lat_a = pooled_all["p95_ms"] <= 40.0
+        criteria.append(
+            {
+                "policy": policy,
+                "criterion": "LATENCY_A",
+                "p95_ms": pooled_all["p95_ms"],
+                "pass": lat_a,
+                "aggregation": "pooled_samples",
+            }
+        )
         sensor_ok = True
         for sensor in ("DAVIS", "DVX", "EVK4"):
-            sp = [r["p95_ms"] for r in latency_rows if r["policy"] == policy and r["sensor"] == sensor]
-            sp95 = float(np.mean(sp)) if sp else float("nan")
-            ok = bool(sp95 <= 40.0) if not math.isnan(sp95) else False
+            sp = pooled_percentiles({sensor: latency_raw[policy][sensor]})
+            ok = sp["p95_ms"] <= 40.0 if sp["n"] > 0 else False
             sensor_ok = sensor_ok and ok
-            criteria.append({"policy": policy, "criterion": f"LATENCY_B_{sensor}", "p95_ms": sp95, "pass": ok})
-        criteria.append({"policy": policy, "criterion": "LATENCY_B", "p95_ms": overall_p95, "pass": sensor_ok})
+            criteria.append(
+                {
+                    "policy": policy,
+                    "criterion": f"LATENCY_B_{sensor}",
+                    "p95_ms": sp["p95_ms"],
+                    "pass": ok,
+                    "aggregation": "pooled_samples",
+                }
+            )
+        criteria.append(
+            {
+                "policy": policy,
+                "criterion": "LATENCY_B",
+                "p95_ms": pooled_all["p95_ms"],
+                "pass": sensor_ok,
+                "aggregation": "pooled_samples",
+            }
+        )
+        # mean_fold_p95 for reference only
+        fold_p95 = [
+            r["p95_ms"]
+            for r in latency_rows
+            if r["policy"] == policy and r["sensor"] == "ALL" and r.get("aggregation") == "per_fold"
+        ]
+        if fold_p95:
+            criteria.append(
+                {
+                    "policy": policy,
+                    "criterion": "mean_fold_p95_ALL",
+                    "p95_ms": float(np.mean(fold_p95)),
+                    "pass": False,
+                    "aggregation": "mean_of_fold_p95",
+                }
+            )
     write_csv(args.out_dir / "latency_criteria.csv", criteria)
     print("challenge_metric_done", flush=True)
     print(f"parity_ok={parity_ok}", flush=True)
