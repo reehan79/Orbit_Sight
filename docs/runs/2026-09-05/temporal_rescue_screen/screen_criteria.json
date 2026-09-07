@@ -1,0 +1,29 @@
+{
+  "SCREEN_A_f1": {
+    "pass": false,
+    "temporal": 0.37941745824517176,
+    "d2": 0.3892306032157117
+  },
+  "SCREEN_B_recall": {
+    "pass": true,
+    "temporal": 0.35654454691598275,
+    "d2": 0.3051865640071072
+  },
+  "SCREEN_C_precision": {
+    "pass": false,
+    "temporal": 0.40542620742736196
+  },
+  "SCREEN_D_empty_fpr": {
+    "pass": false,
+    "temporal": 0.04727659547659605
+  },
+  "SCREEN_E_invariance": {
+    "pass": true,
+    "accepted_path_mismatches": 0
+  },
+  "SCREEN_F_latency_p95": {
+    "pass": true,
+    "temporal_p95_ms": 29.817759999999986
+  },
+  "FULL_CV_RECOMMENDED": false
+}
