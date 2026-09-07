@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gc
 import json
 import math
 import shutil
@@ -18,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter_ns
 
+import joblib
 import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import KFold
@@ -51,14 +53,31 @@ from orbitsight.inference.temporal_rescue import (
     HistorySlot,
     N_TEMPORAL_FEATURES,
     TEMPORAL_FEATURE_NAMES,
+    no_rescue_threshold,
+    select_rescue_threshold_from_f1,
 )
 from orbitsight.inference.windows import WINDOW_US, enumerate_challenge_windows
 from orbitsight.io import read_detection_file
 from orbitsight.sprint import parse_fold_ids, write_atomic_json, write_atomic_text
+from orbitsight.sprint.s2_static_cache import (
+    S2_STATIC_DIR,
+    ensure_s2_sequence_cache,
+    fit_size_s2_cached,
+    gc_release,
+    log_rss,
+)
 
 LOG_GLOBAL_IDX = FEATURE_NAMES.index("log_global_event_count")
 SPLIT = cv.SPLIT
 TII_EVAL = cv.TII_EVAL
+# Invalidate leaky v1 checkpoints; only resume matching methodology.
+METHODOLOGY_VERSION = "v2_true_inner_oof"
+OUTER_BUNDLE_ROOT = Path("artifacts/temporal_rescue_outer")
+
+
+def _install_s2_cache_hook() -> None:
+    """Route all fit_size_s2 calls (including nested CV) through static cache."""
+    cv.fit_size_s2 = fit_size_s2_cached  # type: ignore[assignment]
 
 
 def write_csv_union(path: Path, rows: list[dict]) -> None:
@@ -144,7 +163,10 @@ def run_scored_sequence(
     *,
     use_fast: bool = False,
 ) -> list[ScoredWindow]:
-    """Unthresholded TRUE-P1 + D2 gate score + causal temporal features."""
+    """Unthresholded TRUE-P1 + D2 gate score + causal temporal features.
+
+    Every 40-ms window advances history, including proposal-free empties.
+    """
     stream = SequenceStream(sequence, split_dir)
     det_gts = read_detection_file(split_dir / f"{sequence}_bb_windows_40ms.txt")
     state = CausalTemporalState(HISTORY)
@@ -154,8 +176,12 @@ def run_scored_sequence(
 
     for ws in enumerate_challenge_windows(stream.timestamps):
         we = int(ws) + WINDOW_US
+        current, _prior = stream.slice_window(int(ws), we)
+        event_count = float(len(current))
         res = run_fn(stream, int(ws), we, conf_model, size_trees, always_emit=True)
         if res is None:
+            # Explicit empty slot — consumes one of the seven history positions.
+            state.push(HistorySlot.empty(event_count=event_count))
             continue
         gf = build_gate_features(res, stream, size_trees, reuse_geometry=True)
         gate = float(cv.score_gate_g1(gate_scaler, gate_clf, gf.reshape(1, -1))[0])
@@ -163,7 +189,6 @@ def run_scored_sequence(
         base = float(res.confidence)
         cx_cells = float(res.cx) / cell
         cy_cells = float(res.cy) / cell
-        event_count = float(len(res.current))
         event_rate_log = float(res.features[res.sel_idx, LOG_GLOBAL_IDX])
         temporal = state.features(
             cx_cells=cx_cells,
@@ -201,6 +226,7 @@ def run_scored_sequence(
                 gate_prob=gate,
                 base_conf=base,
                 event_count=event_count,
+                has_candidate=True,
             )
         )
     return out
@@ -311,45 +337,352 @@ def select_rescue_threshold(
     oof_rescue: dict[tuple[str, int], float],
     split_dir: Path,
 ) -> float:
-    """Maximize TII-style detection F1 of D2 accepts + OOF rescues on OUTER TRAIN."""
+    """Maximize TII detection F1 of D2 accepts + OOF rescues; include NO_RESCUE."""
     rejected = [w for w in train_windows if w.gate_score < thr_d2]
-    if not rejected:
-        return 1.0
-    scores = np.asarray([oof_rescue.get((w.sequence, w.ws), 0.0) for w in rejected], dtype=np.float64)
-    qs = np.unique(np.quantile(scores, np.linspace(0.0, 1.0, 101)))
     train_seqs = sorted({w.sequence for w in train_windows})
-    best_t, best_f1 = 1.0, -1.0
-    for t in qs:
-        preds = temporal_rescue_preds(
-            train_windows,
-            thr_d2,
-            float(t),
-            rescue_scores=np.asarray(
-                [oof_rescue.get((w.sequence, w.ws), -1.0) for w in train_windows],
-                dtype=np.float64,
-            ),
-        )
+    score_vec = np.asarray(
+        [oof_rescue.get((w.sequence, w.ws), -1.0) for w in train_windows],
+        dtype=np.float64,
+    )
+    rejected_scores = np.asarray(
+        [oof_rescue.get((w.sequence, w.ws), 0.0) for w in rejected],
+        dtype=np.float64,
+    )
+    no_rescue = no_rescue_threshold(rejected_scores)
+    qs = (
+        np.unique(np.quantile(rejected_scores, np.linspace(0.0, 1.0, 101))).tolist()
+        if len(rejected_scores)
+        else []
+    )
+    candidates = [float(t) for t in qs] + [float(no_rescue)]
+
+    f1_at: dict[float, float] = {}
+    for t in candidates:
+        preds = temporal_rescue_preds(train_windows, thr_d2, float(t), score_vec)
         scored = score_bundle(preds, train_seqs, split_dir)
-        f1 = float(scored["overall"].f1)
-        if f1 > best_f1:
-            best_f1, best_t = f1, float(t)
-    return best_t
+        f1_at[float(t)] = float(scored["overall"].f1)
+    return select_rescue_threshold_from_f1(candidates, f1_at, no_rescue)
+
+
+def _scored_window_to_dict(w: ScoredWindow) -> dict:
+    return {
+        "sequence": w.sequence,
+        "ws": w.ws,
+        "we": w.we,
+        "row": list(w.row),
+        "base_conf": w.base_conf,
+        "gate_score": w.gate_score,
+        "has_gt": w.has_gt,
+        "is_tp_if_emitted": w.is_tp_if_emitted,
+        "temporal": w.temporal.tolist(),
+        "cx_cells": w.cx_cells,
+        "cy_cells": w.cy_cells,
+        "event_count": w.event_count,
+        "top20_has_tp_geometry": w.top20_has_tp_geometry,
+    }
+
+
+def _scored_window_from_dict(d: dict) -> ScoredWindow:
+    return ScoredWindow(
+        sequence=str(d["sequence"]),
+        ws=int(d["ws"]),
+        we=int(d["we"]),
+        row=tuple(d["row"]),
+        base_conf=float(d["base_conf"]),
+        gate_score=float(d["gate_score"]),
+        has_gt=bool(d["has_gt"]),
+        is_tp_if_emitted=bool(d["is_tp_if_emitted"]),
+        temporal=np.asarray(d["temporal"], dtype=np.float64),
+        cx_cells=float(d["cx_cells"]),
+        cy_cells=float(d["cy_cells"]),
+        event_count=float(d["event_count"]),
+        top20_has_tp_geometry=d.get("top20_has_tp_geometry"),
+    )
+
+
+def inner_split_cache_path(out_dir: Path, fold_id: int, split_i: int) -> Path:
+    return out_dir / f"inner_oof_fold{fold_id}_split{split_i}.json"
+
+
+def fit_upstream_models(sequences: list[str], cache, table, split_dir: Path):
+    """Fit conf + S2 + G1 using only the given sequences (gate via nested OOF)."""
+    _install_s2_cache_hook()
+    if len(sequences) < 2:
+        train_idx = np.flatnonzero(np.isin(table["sequence"], sequences))
+        mask = np.array([str(s) in set(sequences) for s in cache["sequence"]], dtype=bool)
+        conf = cv.fit_confidence(cache["features"][mask], cache["target"][mask])
+        size = fit_size_s2_cached(table, train_idx, split_dir)
+        recs = cv.run_unthresholded_p1(list(sequences), split_dir, conf, size, True)
+        Xg = np.stack([r.gate_features for r in recs])
+        yg = np.array([r.is_tp_if_emitted for r in recs], dtype=np.int8)
+        g1_scaler, g1_clf = cv.fit_gate_g1(Xg, yg)
+        thr = cv.detection_f1_threshold_from_records(
+            recs, cv.score_gate_g1(g1_scaler, g1_clf, Xg)
+        )
+        return conf, size, g1_scaler, g1_clf, thr
+
+    _inner_val, oof_g1, _oof_g2, train_gate_g1, _ = cv.inner_oof_combined(
+        sequences, cache, table, split_dir
+    )
+    thr = cv.detection_f1_threshold_from_records(_inner_val, oof_g1) if len(oof_g1) else 0.5
+    train_idx = np.flatnonzero(np.isin(table["sequence"], sequences))
+    mask = np.array([str(s) in set(sequences) for s in cache["sequence"]], dtype=bool)
+    conf = cv.fit_confidence(cache["features"][mask], cache["target"][mask])
+    size = fit_size_s2_cached(table, train_idx, split_dir)
+    Xg = np.stack([r.gate_features for r in train_gate_g1])
+    yg = np.array([r.is_tp_if_emitted for r in train_gate_g1], dtype=np.int8)
+    g1_scaler, g1_clf = cv.fit_gate_g1(Xg, yg)
+    return conf, size, g1_scaler, g1_clf, thr
+
+
+def build_true_inner_oof_windows(
+    outer_train: list[str],
+    cache,
+    table,
+    split_dir: Path,
+    out_dir: Path,
+    fold_id: int,
+    *,
+    resume: bool = True,
+    split_ids: list[int] | None = None,
+    stop_after_requested: bool = False,
+) -> list[ScoredWindow]:
+    """Score each outer-train sequence with upstream models that never saw it.
+
+    If split_ids is set, only those KFold splits are built/loaded.
+    If stop_after_requested, do not pool missing splits (inner-cache stage).
+    """
+    seqs = np.array(sorted(set(outer_train)))
+    pooled: list[ScoredWindow] = []
+    if len(seqs) < 2:
+        conf, size, g1_scaler, g1_clf, _ = fit_upstream_models(
+            list(seqs), cache, table, split_dir
+        )
+        return run_scored_sequences(list(seqs), split_dir, conf, size, g1_scaler, g1_clf)
+
+    kf = KFold(n_splits=min(5, len(seqs)), shuffle=True, random_state=42)
+    all_splits = list(kf.split(seqs))
+    wanted = set(range(len(all_splits))) if split_ids is None else set(int(i) for i in split_ids)
+
+    for split_i, (tr_i, va_i) in enumerate(all_splits):
+        if split_i not in wanted:
+            if not stop_after_requested:
+                # Still load for pooling if present
+                cache_path = inner_split_cache_path(out_dir, fold_id, split_i)
+                if cache_path.exists():
+                    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+                    if payload.get("methodology") == METHODOLOGY_VERSION:
+                        pooled.extend(_scored_window_from_dict(d) for d in payload["windows"])
+            continue
+
+        cache_path = inner_split_cache_path(out_dir, fold_id, split_i)
+        if resume and cache_path.exists():
+            payload = json.loads(cache_path.read_text(encoding="utf-8"))
+            if (
+                payload.get("methodology") == METHODOLOGY_VERSION
+                and int(payload.get("fold", -1)) == fold_id
+                and int(payload.get("split", -1)) == split_i
+            ):
+                print(f"  inner split {split_i}: REUSE {cache_path.name}", flush=True)
+                if not stop_after_requested:
+                    pooled.extend(_scored_window_from_dict(d) for d in payload["windows"])
+                continue
+
+        inner_train = list(seqs[tr_i])
+        inner_val = list(seqs[va_i])
+        print(
+            f"  inner split {split_i}: fit upstream on {len(inner_train)} seqs, "
+            f"score {len(inner_val)} held-out",
+            flush=True,
+        )
+        log_rss(f"before_split_{split_i}")
+        conf, size, g1_scaler, g1_clf, _ = fit_upstream_models(
+            inner_train, cache, table, split_dir
+        )
+        va_windows = run_scored_sequences(
+            inner_val, split_dir, conf, size, g1_scaler, g1_clf
+        )
+        write_atomic_json(
+            cache_path,
+            {
+                "methodology": METHODOLOGY_VERSION,
+                "fold": fold_id,
+                "split": split_i,
+                "inner_train": inner_train,
+                "inner_val": inner_val,
+                "windows": [_scored_window_to_dict(w) for w in va_windows],
+            },
+        )
+        print(f"  inner split {split_i}: wrote {cache_path.name}", flush=True)
+        log_rss(f"after_split_{split_i}")
+        if not stop_after_requested:
+            pooled.extend(va_windows)
+        gc_release(conf, size, g1_scaler, g1_clf, va_windows)
+    return pooled
+
+
+def outer_bundle_dir(fold_id: int) -> Path:
+    return OUTER_BUNDLE_ROOT / f"fold{fold_id}"
+
+
+def save_outer_bundle(
+    fold_id: int,
+    train_seqs: list[str],
+    conf_model,
+    size_trees,
+    g1_scaler,
+    g1_clf,
+    thr_d2: float,
+) -> Path:
+    d = outer_bundle_dir(fold_id)
+    d.mkdir(parents=True, exist_ok=True)
+    joblib.dump(conf_model, d / "conf.joblib")
+    joblib.dump(size_trees, d / "size_s2.joblib")
+    joblib.dump(g1_scaler, d / "g1_scaler.joblib")
+    joblib.dump(g1_clf, d / "g1_clf.joblib")
+    meta = {
+        "methodology": METHODOLOGY_VERSION,
+        "fold": fold_id,
+        "train_seqs": list(train_seqs),
+        "thr_d2": float(thr_d2),
+        "hyperparams": {
+            "confidence": "ExtraTreesClassifier n=64 depth=14 leaf=12 balanced rs=42",
+            "s2": "ExtraTreesRegressor n=32 depth=12 leaf=24 rs=42",
+            "gate": "StandardScaler+LogisticRegression C=1 balanced max_iter=1000 rs=42",
+        },
+    }
+    write_atomic_json(d / "meta.json", meta)
+    print(f"  saved outer bundle {d}", flush=True)
+    return d
+
+
+def load_outer_bundle(fold_id: int, train_seqs: list[str]):
+    d = outer_bundle_dir(fold_id)
+    meta_path = d / "meta.json"
+    if not meta_path.exists():
+        return None
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    if meta.get("methodology") != METHODOLOGY_VERSION:
+        print(f"  outer bundle stale methodology: {meta.get('methodology')}", flush=True)
+        return None
+    if list(meta.get("train_seqs", [])) != list(train_seqs):
+        print("  outer bundle train_seqs mismatch; ignoring", flush=True)
+        return None
+    for name in ("conf.joblib", "size_s2.joblib", "g1_scaler.joblib", "g1_clf.joblib"):
+        if not (d / name).exists():
+            print(f"  outer bundle missing {name}", flush=True)
+            return None
+    conf = joblib.load(d / "conf.joblib")
+    size = joblib.load(d / "size_s2.joblib")
+    scaler = joblib.load(d / "g1_scaler.joblib")
+    clf = joblib.load(d / "g1_clf.joblib")
+    thr = float(meta["thr_d2"])
+    print(f"  loaded outer bundle fold{fold_id} thr_d2={thr:.6f}", flush=True)
+    return conf, size, scaler, clf, thr
+
+
+def ensure_s2_static_for_fold_sequences(folds: list[dict], table, split_dir: Path) -> None:
+    seqs: set[str] = set()
+    for fold in folds:
+        seqs.update(str(s) for s in fold["train"])
+        seqs.update(str(s) for s in fold["validation"])
+    print(f"Ensuring S2 static cache for {len(seqs)} sequences...", flush=True)
+    log_rss("before_s2_static")
+    for sequence in sorted(seqs):
+        ensure_s2_sequence_cache(sequence, table, split_dir, S2_STATIC_DIR)
+    log_rss("after_s2_static")
+
+
+def stage_inner_cache(
+    fold: dict,
+    cache,
+    table,
+    split_dir: Path,
+    out_dir: Path,
+    split_ids: list[int],
+    *,
+    resume: bool = True,
+) -> None:
+    """Build ONLY requested inner-OOF split caches; no outer D2. Then exit."""
+    _install_s2_cache_hook()
+    fold_id = int(fold["fold"])
+    train_seqs = list(fold["train"])
+    print(
+        f"STAGE inner-cache fold={fold_id} splits={split_ids} "
+        f"(no outer D2 / no evaluate)",
+        flush=True,
+    )
+    ensure_s2_static_for_fold_sequences([fold], table, split_dir)
+    build_true_inner_oof_windows(
+        train_seqs,
+        cache,
+        table,
+        split_dir,
+        out_dir,
+        fold_id,
+        resume=resume,
+        split_ids=split_ids,
+        stop_after_requested=True,
+    )
+    print(f"STAGE inner-cache fold={fold_id} DONE; exiting process.", flush=True)
+
+
+def stage_outer_bundle(
+    fold: dict,
+    cache,
+    table,
+    split_dir: Path,
+    *,
+    resume: bool = True,
+) -> None:
+    """Build/cache outer deployed D2 champion once; no evaluate."""
+    _install_s2_cache_hook()
+    fold_id = int(fold["fold"])
+    train_seqs = list(fold["train"])
+    print(f"STAGE outer-bundle fold={fold_id}", flush=True)
+    if resume:
+        loaded = load_outer_bundle(fold_id, train_seqs)
+        if loaded is not None:
+            print("  outer bundle already valid; skip", flush=True)
+            return
+    ensure_s2_static_for_fold_sequences([fold], table, split_dir)
+    log_rss("before_outer_oof")
+    print(f"Fold {fold_id}: D2 inner OOF (outer bundle)...", flush=True)
+    inner_val_recs, oof_g1, _oof_g2, train_gate_g1, _ = cv.inner_oof_combined(
+        train_seqs, cache, table, split_dir
+    )
+    thr_g1 = cv.detection_f1_threshold_from_records(inner_val_recs, oof_g1) if len(oof_g1) else 0.5
+    train_idx = np.flatnonzero(np.isin(table["sequence"], train_seqs))
+    mask = np.array([str(s) in set(train_seqs) for s in cache["sequence"]], dtype=bool)
+    conf_model = cv.fit_confidence(cache["features"][mask], cache["target"][mask])
+    size_trees = fit_size_s2_cached(table, train_idx, split_dir)
+    Xg = np.stack([r.gate_features for r in train_gate_g1])
+    yg = np.array([r.is_tp_if_emitted for r in train_gate_g1], dtype=np.int8)
+    g1_scaler, g1_clf = cv.fit_gate_g1(Xg, yg)
+    save_outer_bundle(fold_id, train_seqs, conf_model, size_trees, g1_scaler, g1_clf, thr_g1)
+    log_rss("after_outer_bundle")
+    gc_release(inner_val_recs, oof_g1, train_gate_g1, conf_model, size_trees, g1_scaler, g1_clf)
+    print(f"STAGE outer-bundle fold={fold_id} DONE; exiting process.", flush=True)
 
 
 def inner_oof_rescue_probs(
-    train_windows: list[ScoredWindow],
+    oof_windows: list[ScoredWindow],
     thr_d2: float,
 ) -> dict[tuple[str, int], float]:
-    rejected = [w for w in train_windows if w.gate_score < thr_d2]
+    """Sequence-level OOF rescue probabilities on no-leakage upstream features."""
+    rejected = [w for w in oof_windows if w.gate_score < thr_d2]
     oof: dict[tuple[str, int], float] = {}
     if not rejected:
         return oof
     seqs = np.array(sorted({w.sequence for w in rejected}))
+    by_seq: dict[str, list[ScoredWindow]] = defaultdict(list)
+    for w in rejected:
+        by_seq[w.sequence].append(w)
+
     if len(seqs) < 2:
         X = np.stack([w.temporal for w in rejected])
         y = np.asarray([1 if w.is_tp_if_emitted else 0 for w in rejected], dtype=np.int8)
         if y.min() == y.max():
-            # degenerate: constant score
             for w in rejected:
                 oof[(w.sequence, w.ws)] = float(y[0])
             return oof
@@ -358,10 +691,6 @@ def inner_oof_rescue_probs(
         for w, p in zip(rejected, probs):
             oof[(w.sequence, w.ws)] = float(p)
         return oof
-
-    by_seq: dict[str, list[ScoredWindow]] = defaultdict(list)
-    for w in rejected:
-        by_seq[w.sequence].append(w)
 
     kf = KFold(n_splits=min(5, len(seqs)), shuffle=True, random_state=42)
     for tr_i, va_i in kf.split(seqs):
@@ -507,8 +836,11 @@ def benchmark_latency(
 
         # Temporal rescue complete path (causal incremental state)
         t1 = perf_counter_ns()
+        current2, _ = stream.slice_window(int(ws), we)
+        event_count_lat = float(len(current2))
         res2 = run_p1_window_fast(stream, int(ws), we, conf_model, size_trees, always_emit=True)
         if res2 is None:
+            state.push(HistorySlot.empty(event_count=event_count_lat))
             rescue_ms.append((perf_counter_ns() - t1) / 1e6)
             continue
         gf2 = build_gate_features(res2, stream, size_trees, reuse_geometry=True)
@@ -536,6 +868,7 @@ def benchmark_latency(
                 gate_prob=gate2,
                 base_conf=base,
                 event_count=event_count,
+                has_candidate=True,
             )
         )
         rescue_ms.append((perf_counter_ns() - t1) / 1e6)
@@ -554,26 +887,35 @@ def run_fold(
     split_dir: Path,
     out_dir: Path,
 ) -> dict:
+    _install_s2_cache_hook()
     fold_id = int(fold["fold"])
     train_seqs = list(fold["train"])
     val_seqs = list(fold["validation"])
-    print(f"Fold {fold_id}: D2 inner OOF...", flush=True)
 
-    inner_val_recs, oof_g1, _oof_g2, train_gate_g1, _train_gate_g2 = cv.inner_oof_combined(
-        train_seqs, cache, table, split_dir
-    )
-    thr_g1 = cv.detection_f1_threshold_from_records(inner_val_recs, oof_g1) if len(oof_g1) else 0.5
+    loaded = load_outer_bundle(fold_id, train_seqs)
+    if loaded is not None:
+        conf_model, size_trees, g1_scaler, g1_clf, thr_g1 = loaded
+        print(f"Fold {fold_id}: using cached outer D2 bundle thr={thr_g1:.6f}", flush=True)
+    else:
+        print(f"Fold {fold_id}: D2 inner OOF...", flush=True)
+        log_rss("before_outer_oof")
+        inner_val_recs, oof_g1, _oof_g2, train_gate_g1, _train_gate_g2 = cv.inner_oof_combined(
+            train_seqs, cache, table, split_dir
+        )
+        thr_g1 = cv.detection_f1_threshold_from_records(inner_val_recs, oof_g1) if len(oof_g1) else 0.5
 
-    train_idx = np.flatnonzero(np.isin(table["sequence"], train_seqs))
-    mask = np.array([str(s) in set(train_seqs) for s in cache["sequence"]], dtype=bool)
-    conf_model = cv.fit_confidence(cache["features"][mask], cache["target"][mask])
-    size_trees = cv.fit_size_s2(table, train_idx, split_dir)
+        train_idx = np.flatnonzero(np.isin(table["sequence"], train_seqs))
+        mask = np.array([str(s) in set(train_seqs) for s in cache["sequence"]], dtype=bool)
+        conf_model = cv.fit_confidence(cache["features"][mask], cache["target"][mask])
+        size_trees = fit_size_s2_cached(table, train_idx, split_dir)
 
-    Xg = np.stack([r.gate_features for r in train_gate_g1])
-    yg = np.array([r.is_tp_if_emitted for r in train_gate_g1], dtype=np.int8)
-    g1_scaler, g1_clf = cv.fit_gate_g1(Xg, yg)
+        Xg = np.stack([r.gate_features for r in train_gate_g1])
+        yg = np.array([r.is_tp_if_emitted for r in train_gate_g1], dtype=np.int8)
+        g1_scaler, g1_clf = cv.fit_gate_g1(Xg, yg)
+        save_outer_bundle(fold_id, train_seqs, conf_model, size_trees, g1_scaler, g1_clf, thr_g1)
+        gc_release(inner_val_recs, oof_g1, train_gate_g1)
 
-    print(f"Fold {fold_id}: scored OUTER TRAIN (temporal)...", flush=True)
+    print(f"Fold {fold_id}: scored OUTER TRAIN (deployed D2 models)...", flush=True)
     train_windows = run_scored_sequences(
         train_seqs, split_dir, conf_model, size_trees, g1_scaler, g1_clf
     )
@@ -582,9 +924,14 @@ def run_fold(
         val_seqs, split_dir, conf_model, size_trees, g1_scaler, g1_clf
     )
 
+    print(f"Fold {fold_id}: TRUE inner-OOF upstream features for rescue...", flush=True)
+    oof_windows = build_true_inner_oof_windows(
+        train_seqs, cache, table, split_dir, out_dir, fold_id, resume=True
+    )
     print(f"Fold {fold_id}: rescue INNER-OOF + threshold...", flush=True)
-    oof_rescue = inner_oof_rescue_probs(train_windows, thr_g1)
-    thr_rescue = select_rescue_threshold(train_windows, thr_g1, oof_rescue, split_dir)
+    oof_rescue = inner_oof_rescue_probs(oof_windows, thr_g1)
+    # Threshold selection uses no-leakage OOF windows (D2 decisions + OOF rescue probs)
+    thr_rescue = select_rescue_threshold(oof_windows, thr_g1, oof_rescue, split_dir)
 
     rejected_train = [w for w in train_windows if w.gate_score < thr_g1]
     if rejected_train:
@@ -773,29 +1120,42 @@ def run_fold(
     write_atomic_json(fold_checkpoint_path(out_dir, fold_id), {
         "fold": fold_id,
         "done": True,
+        "methodology": METHODOLOGY_VERSION,
         "thr_d2": thr_g1,
         "thr_rescue": thr_rescue,
         "mismatches": mismatches,
         "champ": result["champ_overall"],
         "rescue": result["rescue_overall"],
         "accounting": acct,
+        "has_latency": True,
     })
     return result
 
 
-def pool_metrics(fold_results: list[dict], key: str) -> dict:
-    """Micro-pool TP/FP/FN across folds; recompute precision/recall/F1."""
+def pool_metrics(fold_results: list[dict], key: str, seq_rows: list[dict], method: str) -> dict:
+    """Micro-pool TP/FP/FN; sequence-macro from all validation sequences across folds."""
     tp = sum(int(r[key]["tp"]) for r in fold_results)
     fp = sum(int(r[key]["fp"]) for r in fold_results)
     fn = sum(int(r[key]["fn"]) for r in fold_results)
     precision = tp / (tp + fp) if tp + fp else 0.0
     recall = tp / (tp + fn) if tp + fn else 0.0
     f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
-    # Weighted mean matched IoU / macro averages across folds by TP or equal weight
     ious = [r[key]["mean_matched_iou"] for r in fold_results]
     empty = [r[key]["empty_window_fpr"] for r in fold_results]
-    macro_f1 = float(np.mean([r[key]["sequence_macro_f1"] for r in fold_results]))
-    macro_rec = float(np.mean([r[key]["sequence_macro_recall"] for r in fold_results]))
+    # Sequence macro: mean over all val sequences with GT (tp+fn>0), not mean of fold macros
+    seq_f1s = []
+    seq_recs = []
+    for r in seq_rows:
+        if str(r.get("method")) != method:
+            continue
+        stp = int(float(r.get("tp", 0)))
+        sfn = int(float(r.get("fn", 0)))
+        if stp + sfn <= 0:
+            continue
+        seq_f1s.append(float(r["f1"]))
+        seq_recs.append(float(r["recall"]))
+    macro_f1 = float(np.mean(seq_f1s)) if seq_f1s else 0.0
+    macro_rec = float(np.mean(seq_recs)) if seq_recs else 0.0
     aps = [r[key]["ap50"] for r in fold_results]
     return {
         "precision": precision,
@@ -812,6 +1172,85 @@ def pool_metrics(fold_results: list[dict], key: str) -> dict:
     }
 
 
+def latency_raw_path(out_dir: Path, fold_id: int) -> Path:
+    return out_dir / f"latency_raw_fold{fold_id}.json"
+
+
+def checkpoint_complete(out_dir: Path, fold_id: int) -> bool:
+    ckpt = fold_checkpoint_path(out_dir, fold_id)
+    if not ckpt.exists():
+        return False
+    payload = json.loads(ckpt.read_text(encoding="utf-8"))
+    if payload.get("methodology") != METHODOLOGY_VERSION:
+        return False
+    if not latency_raw_path(out_dir, fold_id).exists():
+        return False
+    return True
+
+
+def refit_models_for_latency(fold, cache, table, split_dir: Path, thr_d2: float, thr_rescue: float):
+    """Load outer bundle if possible; else refit models only (no val scoring)."""
+    _install_s2_cache_hook()
+    train_seqs = list(fold["train"])
+    loaded = load_outer_bundle(int(fold["fold"]), train_seqs)
+    if loaded is not None:
+        conf_model, size_trees, g1_scaler, g1_clf, _thr = loaded
+    else:
+        train_idx = np.flatnonzero(np.isin(table["sequence"], train_seqs))
+        mask = np.array([str(s) in set(train_seqs) for s in cache["sequence"]], dtype=bool)
+        conf_model = cv.fit_confidence(cache["features"][mask], cache["target"][mask])
+        size_trees = fit_size_s2_cached(table, train_idx, split_dir)
+        _iv, oof_g1, _og2, train_gate_g1, _ = cv.inner_oof_combined(
+            train_seqs, cache, table, split_dir
+        )
+        Xg = np.stack([r.gate_features for r in train_gate_g1])
+        yg = np.array([r.is_tp_if_emitted for r in train_gate_g1], dtype=np.int8)
+        g1_scaler, g1_clf = cv.fit_gate_g1(Xg, yg)
+    X_dummy = np.zeros((2, N_TEMPORAL_FEATURES), dtype=np.float64)
+    y_dummy = np.asarray([0, 1], dtype=np.int8)
+    rescue_scaler, rescue_clf = fit_rescue(X_dummy, y_dummy)
+    return conf_model, size_trees, g1_scaler, g1_clf, rescue_scaler, rescue_clf
+
+
+def run_latency_only(
+    fold: dict,
+    cache,
+    table,
+    split_dir: Path,
+    out_dir: Path,
+    thr_d2: float,
+    thr_rescue: float,
+) -> dict[str, dict[str, list[float]]]:
+    fold_id = int(fold["fold"])
+    print(f"Fold {fold_id}: latency-only (metrics checkpoint kept)...", flush=True)
+    conf_model, size_trees, g1_scaler, g1_clf, rescue_scaler, rescue_clf = refit_models_for_latency(
+        fold, cache, table, split_dir, thr_d2, thr_rescue
+    )
+    lat_samples: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+    for seq in LATENCY_SEQS:
+        if not (split_dir / f"{seq}_labeled_events.npy").exists():
+            continue
+        print(f"Fold {fold_id}: latency {seq}", flush=True)
+        samples = benchmark_latency(
+            seq,
+            split_dir,
+            conf_model,
+            size_trees,
+            g1_scaler,
+            g1_clf,
+            thr_d2,
+            rescue_scaler,
+            rescue_clf,
+            thr_rescue,
+        )
+        sensor = cv.sensor_name(seq)
+        for method, vals in samples.items():
+            lat_samples[method][sensor].extend(vals)
+            lat_samples[method]["ALL"].extend(vals)
+    cv.save_latency_fold(out_dir, fold_id, lat_samples)
+    return {m: {s: v for s, v in sensors.items()} for m, sensors in lat_samples.items()}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--split-dir", type=Path, default=SPLIT)
@@ -819,6 +1258,19 @@ def main():
     parser.add_argument("--table", type=Path, default=Path("artifacts/candidate_table.csv"))
     parser.add_argument("--folds", type=Path, default=Path("sequence_folds.json"))
     parser.add_argument("--fold-ids", type=str, default="1,4")
+    parser.add_argument(
+        "--stage",
+        type=str,
+        default="evaluate",
+        choices=("inner-cache", "outer-bundle", "evaluate", "aggregate", "all"),
+        help="Execution stage (surgery). inner-cache does NOT build outer D2.",
+    )
+    parser.add_argument(
+        "--inner-split-ids",
+        type=str,
+        default=None,
+        help="Comma list of inner KFold split indices for --stage inner-cache.",
+    )
     parser.add_argument("--resume", action="store_true", default=True)
     parser.add_argument("--no-resume", action="store_true")
     parser.add_argument(
@@ -835,6 +1287,7 @@ def main():
     if "Testing_sets" in str(args.split_dir):
         raise SystemExit("Refusing Testing_sets path")
 
+    _install_s2_cache_hook()
     cache = cv.load_cache(args.cache)
     table = cv.load_table(args.table)
     folds_all = json.loads(args.folds.read_text(encoding="utf-8"))
@@ -842,7 +1295,32 @@ def main():
     if fold_filter is None:
         fold_filter = SCREEN_FOLDS
     folds = [f for f in folds_all if int(f["fold"]) in set(fold_filter)]
-    print(f"SCREEN fold_ids={sorted(int(f['fold']) for f in folds)}", flush=True)
+    print(
+        f"SCREEN fold_ids={sorted(int(f['fold']) for f in folds)} stage={args.stage}",
+        flush=True,
+    )
+
+    if args.stage == "inner-cache":
+        if args.inner_split_ids is None:
+            raise SystemExit("--inner-split-ids required for --stage inner-cache")
+        split_ids = [int(x) for x in args.inner_split_ids.split(",") if x.strip() != ""]
+        if len(folds) != 1:
+            raise SystemExit("inner-cache requires exactly one --fold-ids value")
+        stage_inner_cache(
+            folds[0], cache, table, args.split_dir, args.out_dir, split_ids, resume=args.resume
+        )
+        return
+
+    if args.stage == "outer-bundle":
+        if len(folds) != 1:
+            raise SystemExit("outer-bundle requires exactly one --fold-ids value")
+        stage_outer_bundle(folds[0], cache, table, args.split_dir, resume=args.resume)
+        return
+
+    # evaluate / aggregate / all continue below
+    if args.stage == "aggregate":
+        # Fall through using checkpoints only
+        pass
 
     fold_results: list[dict] = []
     compare_fold_rows: list[dict] = []
@@ -858,9 +1336,16 @@ def main():
     for fold in folds:
         fold_id = int(fold["fold"])
         ckpt = fold_checkpoint_path(args.out_dir, fold_id)
-        if args.resume and ckpt.exists():
-            print(f"Fold {fold_id}: resume from {ckpt}", flush=True)
+        lat_path = latency_raw_path(args.out_dir, fold_id)
+
+        if args.stage == "aggregate":
+            if not (args.resume and ckpt.exists()):
+                raise SystemExit(f"aggregate requires fold{fold_id}_done.json")
             payload = json.loads(ckpt.read_text(encoding="utf-8"))
+            if payload.get("methodology") != METHODOLOGY_VERSION:
+                raise SystemExit(f"fold{fold_id} checkpoint not v2")
+            if not lat_path.exists():
+                raise SystemExit(f"aggregate requires {lat_path.name}")
             lat = cv.load_latency_fold(args.out_dir, fold_id)
             for method, sensors in lat.items():
                 for sensor, vals in sensors.items():
@@ -879,6 +1364,69 @@ def main():
             done_folds.add(fold_id)
             continue
 
+        if args.resume and ckpt.exists():
+            payload = json.loads(ckpt.read_text(encoding="utf-8"))
+            if payload.get("methodology") != METHODOLOGY_VERSION:
+                print(
+                    f"Fold {fold_id}: stale methodology "
+                    f"{payload.get('methodology')!r} != {METHODOLOGY_VERSION!r}; rerun",
+                    flush=True,
+                )
+            elif lat_path.exists():
+                print(f"Fold {fold_id}: resume metrics+latency from checkpoint", flush=True)
+                lat = cv.load_latency_fold(args.out_dir, fold_id)
+                for method, sensors in lat.items():
+                    for sensor, vals in sensors.items():
+                        latency_all[method][sensor].extend(vals)
+                fold_results.append(
+                    {
+                        "fold": fold_id,
+                        "thr_d2": payload["thr_d2"],
+                        "thr_rescue": payload["thr_rescue"],
+                        "mismatches": payload["mismatches"],
+                        "champ_overall": payload["champ"],
+                        "rescue_overall": payload["rescue"],
+                        "accounting": payload["accounting"],
+                    }
+                )
+                done_folds.add(fold_id)
+                continue
+            else:
+                # Metrics present, latency missing → latency only (use outer bundle)
+                print(
+                    f"Fold {fold_id}: metrics checkpoint OK but latency raw missing; "
+                    "latency-only rerun",
+                    flush=True,
+                )
+                lat = run_latency_only(
+                    fold,
+                    cache,
+                    table,
+                    args.split_dir,
+                    args.out_dir,
+                    float(payload["thr_d2"]),
+                    float(payload["thr_rescue"]),
+                )
+                for method, sensors in lat.items():
+                    for sensor, vals in sensors.items():
+                        latency_all[method][sensor].extend(vals)
+                fold_results.append(
+                    {
+                        "fold": fold_id,
+                        "thr_d2": payload["thr_d2"],
+                        "thr_rescue": payload["thr_rescue"],
+                        "mismatches": payload["mismatches"],
+                        "champ_overall": payload["champ"],
+                        "rescue_overall": payload["rescue"],
+                        "accounting": payload["accounting"],
+                    }
+                )
+                payload["has_latency"] = True
+                payload["methodology"] = METHODOLOGY_VERSION
+                write_atomic_json(ckpt, payload)
+                done_folds.add(fold_id)
+                continue
+
         # Drop stale CSV rows for this fold before rewrite
         compare_fold_rows = [r for r in compare_fold_rows if int(float(r["fold"])) != fold_id]
         compare_seq_rows = [r for r in compare_seq_rows if int(float(r["fold"])) != fold_id]
@@ -891,15 +1439,68 @@ def main():
         for method, sensors in result["latency"].items():
             for sensor, vals in sensors.items():
                 latency_all[method][sensor].extend(vals)
+        # Per-fold fragments (parallel-safe); merged below when all folds done.
+        write_csv_union(args.out_dir / f"compare_by_fold_fold{fold_id}.csv", result["fold_rows"])
+        write_csv_union(args.out_dir / f"compare_by_sequence_fold{fold_id}.csv", result["seq_rows"])
         write_csv_union(args.out_dir / "compare_by_fold.csv", compare_fold_rows)
         write_csv_union(args.out_dir / "compare_by_sequence.csv", compare_seq_rows)
         done_folds.add(fold_id)
 
+    # Merge any per-fold fragments (e.g. after parallel fold processes)
+    for fid in sorted(int(f["fold"]) for f in folds):
+        frag_f = args.out_dir / f"compare_by_fold_fold{fid}.csv"
+        frag_s = args.out_dir / f"compare_by_sequence_fold{fid}.csv"
+        if frag_f.exists():
+            rows = cv.read_csv_rows(frag_f)
+            compare_fold_rows = [r for r in compare_fold_rows if int(float(r["fold"])) != fid]
+            compare_fold_rows.extend(rows)
+        if frag_s.exists():
+            rows = cv.read_csv_rows(frag_s)
+            compare_seq_rows = [r for r in compare_seq_rows if int(float(r["fold"])) != fid]
+            compare_seq_rows.extend(rows)
+        # Load fold_results from checkpoint if this process did not compute the fold
+        if not any(int(r["fold"]) == fid for r in fold_results):
+            ckpt = fold_checkpoint_path(args.out_dir, fid)
+            if ckpt.exists():
+                payload = json.loads(ckpt.read_text(encoding="utf-8"))
+                if payload.get("methodology") == METHODOLOGY_VERSION:
+                    fold_results.append(
+                        {
+                            "fold": fid,
+                            "thr_d2": payload["thr_d2"],
+                            "thr_rescue": payload["thr_rescue"],
+                            "mismatches": payload["mismatches"],
+                            "champ_overall": payload["champ"],
+                            "rescue_overall": payload["rescue"],
+                            "accounting": payload["accounting"],
+                        }
+                    )
+                    lat = cv.load_latency_fold(args.out_dir, fid)
+                    for method, sensors in lat.items():
+                        for sensor, vals in sensors.items():
+                            latency_all[method][sensor].extend(vals)
+
+    if not fold_results:
+        raise SystemExit("No fold results available for aggregation")
+
+    # Only finalize pooled SCREEN criteria when every requested fold is complete
+    requested = sorted(int(f["fold"]) for f in folds)
+    complete_ids = sorted(int(r["fold"]) for r in fold_results)
+    if complete_ids != requested:
+        print(
+            f"Partial fold set complete={complete_ids} requested={requested}; "
+            "skipping pooled SCREEN criteria (run again when all folds done).",
+            flush=True,
+        )
+        write_csv_union(args.out_dir / "compare_by_fold.csv", compare_fold_rows)
+        write_csv_union(args.out_dir / "compare_by_sequence.csv", compare_seq_rows)
+        return
+
     write_csv_union(args.out_dir / "compare_by_fold.csv", compare_fold_rows)
     write_csv_union(args.out_dir / "compare_by_sequence.csv", compare_seq_rows)
 
-    pooled_d2 = pool_metrics(fold_results, "champ_overall")
-    pooled_tr = pool_metrics(fold_results, "rescue_overall")
+    pooled_d2 = pool_metrics(fold_results, "champ_overall", compare_seq_rows, "CHAMPION_D2")
+    pooled_tr = pool_metrics(fold_results, "rescue_overall", compare_seq_rows, "TEMPORAL_RESCUE")
     mismatches_total = sum(int(r["mismatches"]) for r in fold_results)
 
     acct_pool = {

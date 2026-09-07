@@ -1,6 +1,7 @@
 """Causal temporal features for selective D2 rejection rescue.
 
 Does not alter the accepted D2 path. History is previous windows only.
+Every 40-ms window advances the deque (including proposal-free empties).
 """
 
 from __future__ import annotations
@@ -41,13 +42,26 @@ N_TEMPORAL_FEATURES = len(TEMPORAL_FEATURE_NAMES)
 
 @dataclass(frozen=True)
 class HistorySlot:
-    """Compact causal state for one previous window."""
+    """Compact causal state for one previous 40-ms window."""
 
     cx_cells: float
     cy_cells: float
     gate_prob: float
     base_conf: float
     event_count: float
+    has_candidate: bool = True
+
+    @staticmethod
+    def empty(*, event_count: float = 0.0) -> HistorySlot:
+        """Proposal-free window: still consumes one history slot."""
+        return HistorySlot(
+            cx_cells=0.0,
+            cy_cells=0.0,
+            gate_prob=0.0,
+            base_conf=0.0,
+            event_count=float(event_count),
+            has_candidate=False,
+        )
 
 
 class CausalTemporalState:
@@ -105,6 +119,8 @@ def compute_temporal_features(
     persistence_weighted = 0.0
     for lag in range(1, n + 1):
         slot = hist[-lag]
+        if not slot.has_candidate:
+            continue
         dist = math_hypot(cx_cells - slot.cx_cells, cy_cells - slot.cy_cells)
         if dist <= MATCH_CELLS:
             persistence_count += 1
@@ -124,6 +140,8 @@ def compute_temporal_features(
                 d_sum = 0.0
                 for lag in range(1, n + 1):
                     slot = hist[-lag]
+                    if not slot.has_candidate:
+                        continue
                     pred_x = cx_cells - lag * vx
                     pred_y = cy_cells - lag * vy
                     dist = math_hypot(slot.cx_cells - pred_x, slot.cy_cells - pred_y)
@@ -184,3 +202,26 @@ def compute_temporal_features(
 
 def math_hypot(dx: float, dy: float) -> float:
     return float(np.hypot(dx, dy))
+
+
+def no_rescue_threshold(rescue_scores: np.ndarray) -> float:
+    """Threshold strictly above every rescue probability (D2-only / no-rescue)."""
+    if len(rescue_scores) == 0:
+        return 1.0
+    return float(np.max(rescue_scores)) + 1.0
+
+
+def select_rescue_threshold_from_f1(
+    candidate_thresholds: list[float],
+    f1_at_threshold: dict[float, float],
+    no_rescue_thr: float,
+) -> float:
+    """Pick threshold maximizing F1; prefer NO_RESCUE on ties / if rescues never help."""
+    best_t = float(no_rescue_thr)
+    best_f1 = float(f1_at_threshold.get(no_rescue_thr, -1.0))
+    for t in candidate_thresholds:
+        f1 = float(f1_at_threshold.get(t, -1.0))
+        if f1 > best_f1:
+            best_f1 = f1
+            best_t = float(t)
+    return best_t
