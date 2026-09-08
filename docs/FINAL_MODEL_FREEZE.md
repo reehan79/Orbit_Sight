@@ -2,7 +2,9 @@
 
 **Date (UTC):** 2026-09-07  
 **Branch:** `submission/final-freeze`  
-**Training code git SHA:** `382c70ee80975b566bbfab8cc4916567e64e32c1` (`sprint/final-optimization`)
+**Training code git SHA:** `382c70ee80975b566bbfab8cc4916567e64e32c1` (`sprint/final-optimization`)  
+**Freeze artifact commit:** `38cbdfc` (`submission: add frozen D2 artifacts and runtime loader`)  
+**Hygiene commit:** `bf71ce6` (PR2 clutter removed)
 
 ## Statement
 

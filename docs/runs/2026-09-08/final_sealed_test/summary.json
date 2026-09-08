@@ -1,0 +1,35 @@
+{
+  "label": "FINAL SEALED HOLDOUT \u2014 NO POST-TEST TUNING",
+  "model_dir": "D:\\Projects\\Orbit_Sight\\models\\final",
+  "d2_threshold": 0.848222565945547,
+  "git_sha_models": "382c70ee80975b566bbfab8cc4916567e64e32c1",
+  "sequences": [
+    "2025_12_23_20_53_46_EVK4_mag7.3",
+    "DAVIS_SAOCOM1B_46265_2024-12-04-18-21-37",
+    "DVX_Filtered_Stars3_2025-01-20-20-22-53",
+    "DVX_Filtered_Thuraya3_32404_2025-01-20-20-02-43"
+  ],
+  "local": {
+    "precision": 0.5942972260963892,
+    "recall": 0.5419728660260034,
+    "f1": 0.5669302978786311,
+    "ap50": 0.3864423518556036,
+    "tp": 3835,
+    "fp": 2618,
+    "fn": 3241,
+    "mean_matched_iou": 0.6656838366934367
+  },
+  "tii": {
+    "map50": 0.3864,
+    "precision": 0.5943,
+    "recall": 0.542,
+    "f1": 0.5669
+  },
+  "latency_overall": {
+    "p50_ms": 14.90855,
+    "p95_ms": 25.681505,
+    "p99_ms": 42.72372000000001,
+    "n": 37558
+  },
+  "parity_ok": true
+}
