@@ -7,6 +7,8 @@ Test sequences: 4 (Testing_sets only)
 
 **This is the one and only sealed holdout run. Do not change the model.**
 
+Confidence values in these predictions come from the frozen D2 gate runtime (gate probability), not raw ExtraTrees confidence.
+
 ## Overall (local evaluator; TII parity required)
 
 | metric | local | TII |

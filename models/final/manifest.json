@@ -76,8 +76,8 @@
     "size_s2_extratrees.joblib": "79e65e6848425adda6d9f00da795d4a52a6a6fe7c3dbe6f84084d5f4a5fb0238",
     "d2_gate_scaler.joblib": "43339633fdb9eb37faccf1c08211c1e4b359cb8090ace7b1377479fdebb8b9c1",
     "d2_gate_logistic.joblib": "0d39234a43691295e24747462cf2427d1df9a322d9bdab77278ecb01b16b58b9",
-    "d2_threshold.json": "e49dfdc182070d1ac60b554aa9669ed61468803f0b7e9cb1a85b8aec35a22a25",
-    "feature_names.json": "0be282f562261670bb62e734a334aae828cf4363ad60906d0188ffd2736ab43c"
+    "d2_threshold.json": "009d96413448d98ada17d3e9884d62343294fb166b34db3dedbb420d94ab1da4",
+    "feature_names.json": "7099fbd8e95857cb6cfc84e4d5b688058d7ed530bf296c7e05ecd21c4fbfab5d"
   },
   "notes": [
     "Temporal rescue rejected for deployment; not included.",

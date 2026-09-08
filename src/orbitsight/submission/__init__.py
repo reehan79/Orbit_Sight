@@ -69,38 +69,65 @@ def load_final_bundle(model_dir: Path | None = None) -> FinalD2Bundle:
     )
 
 
-def discover_sequences(dataset_root: Path) -> list[str]:
-    """Discover sequences under a dataset root (Training_sets or Testing_sets layout)."""
-    root = Path(dataset_root)
-    if not root.exists():
-        raise FileNotFoundError(f"dataset root not found: {root}")
-    files = sorted(root.glob("*_labeled_events.npy"))
-    if not files:
-        # Allow nested one-level folders.
-        files = sorted(root.glob("*/*_labeled_events.npy"))
-    seqs = []
-    for p in files:
+def _sequences_in_dir(split_dir: Path) -> list[str]:
+    """List sequences from *_labeled_events.npy directly inside split_dir (non-recursive)."""
+    seqs: list[str] = []
+    for p in sorted(split_dir.glob("*_labeled_events.npy")):
         m = EVENT_STEM.match(p.name)
         if m:
             seqs.append(m.group(1))
+    return seqs
+
+
+def resolve_split_dir(dataset_root: Path) -> Path:
+    """Deterministic split resolution. Never recursively mixes Training_sets + Testing_sets.
+
+    CASE A: dataset_root directly contains *_labeled_events.npy → use dataset_root.
+    CASE B: else Testing_sets/ has events → use Testing_sets ONLY.
+    CASE C: else Training_sets/ has events (and Testing_sets absent/empty) → Training_sets ONLY.
+    CASE D: otherwise fail loudly (no recursive mixing of unexpected nests).
+    """
+    root = Path(dataset_root)
+    if not root.exists():
+        raise FileNotFoundError(f"dataset root not found: {root}")
+
+    direct = _sequences_in_dir(root)
+    if direct:
+        return root.resolve()
+
+    testing = root / "Testing_sets"
+    training = root / "Training_sets"
+    testing_seqs = _sequences_in_dir(testing) if testing.is_dir() else []
+    training_seqs = _sequences_in_dir(training) if training.is_dir() else []
+
+    if testing_seqs:
+        return testing.resolve()
+    if training_seqs:
+        return training.resolve()
+
+    # Unexpected nested layout — refuse to recurse / mix.
+    raise FileNotFoundError(
+        f"no resolvable split under {root}: expected either direct "
+        "*_labeled_events.npy, or Testing_sets/, or Training_sets/ only"
+    )
+
+
+def discover_sequences(dataset_root: Path) -> list[str]:
+    """Discover sequences in the resolved split only (non-recursive)."""
+    split = resolve_split_dir(dataset_root)
+    seqs = _sequences_in_dir(split)
     if not seqs:
-        raise FileNotFoundError(f"no *_labeled_events.npy under {root}")
+        raise FileNotFoundError(f"no *_labeled_events.npy under resolved split {split}")
     return sorted(set(seqs))
 
 
 def sequence_dir_for(dataset_root: Path, sequence: str) -> Path:
-    root = Path(dataset_root)
-    direct = root / f"{sequence}_labeled_events.npy"
+    """Return the directory containing sequence events inside the resolved split only."""
+    split = resolve_split_dir(dataset_root)
+    direct = split / f"{sequence}_labeled_events.npy"
     if direct.exists():
-        return root
-    nested = root / sequence / f"{sequence}_labeled_events.npy"
-    if nested.exists():
-        return root / sequence
-    # Search one level
-    matches = list(root.glob(f"**/{sequence}_labeled_events.npy"))
-    if matches:
-        return matches[0].parent
-    raise FileNotFoundError(f"events not found for {sequence} under {root}")
+        return split
+    raise FileNotFoundError(f"events not found for {sequence} under resolved split {split}")
 
 
 def output_dir(work_root: Path, team_name: str | None = None, day: str | None = None) -> Path:
@@ -166,10 +193,12 @@ def run_dataset(
 ) -> Path:
     bundle = load_final_bundle(model_dir)
     out = output_dir(work_root, team_name=team_name, day=day)
+    split_dir = resolve_split_dir(dataset_root)
     sequences = discover_sequences(dataset_root)
+    print(f"resolved_split={split_dir} n_sequences={len(sequences)}", flush=True)
     for sequence in sequences:
-        split_dir = sequence_dir_for(dataset_root, sequence)
-        rows = infer_sequence(sequence, split_dir, bundle, use_fast=use_fast)
+        seq_dir = sequence_dir_for(dataset_root, sequence)
+        rows = infer_sequence(sequence, seq_dir, bundle, use_fast=use_fast)
         write_sequence_prediction(out, sequence, rows)
         print(f"wrote {sequence} n={len(rows)} -> {out}", flush=True)
     return out

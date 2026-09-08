@@ -697,7 +697,8 @@ def main():
         size_trees = fit_size_s2(table, train_idx, args.split_dir)
 
         val_records = run_unthresholded_p1(val_seqs, args.split_dir, conf_model, size_trees, build_gates=True)
-        ap_preds = ap_preds_from_records(val_records)
+        # Base P1 confidence (used for D0/D1 AP ranking).
+        base_conf_scores = np.array([r.confidence for r in val_records], dtype=np.float64)
 
         train_gate_recs = train_gate_g1
         Xg = np.stack([r.gate_features for r in train_gate_recs])
@@ -710,15 +711,16 @@ def main():
         gate_scores = score_gate_g1(g1_scaler, g1_clf, np.stack([r.gate_features for r in val_records]))
         gate_scores2 = score_gate_g2(g2_clf, np.stack([r.gate_features for r in val_records]))
 
+        # (threshold_scores, thr, ap_ranking_scores) — AP must use each method's continuous score.
         methods = {
-            "D0": (None, t0),
-            "D1": (None, t1),
-            "D2": (gate_scores, thr_g1),
-            "D3": (gate_scores2, thr_g2),
+            "D0": (None, t0, base_conf_scores),
+            "D1": (None, t1, base_conf_scores),
+            "D2": (gate_scores, thr_g1, gate_scores),
+            "D3": (gate_scores2, thr_g2, gate_scores2),
         }
 
         # PART 3 ceiling on validation
-        always_preds = ap_preds_from_records(val_records)
+        always_preds = ap_preds_from_records(val_records, base_conf_scores)
         oracle_preds: dict[str, list[tuple]] = defaultdict(list)
         for rec in val_records:
             if rec.is_tp_if_emitted:
@@ -741,9 +743,10 @@ def main():
                 }
             )
 
-        for method, (scores, thr) in methods.items():
+        for method, (scores, thr, ap_scores) in methods.items():
             thr_preds = records_to_preds(val_records, thr, scores)
             scored_thr = score_preds(thr_preds, val_seqs, args.split_dir)
+            ap_preds = ap_preds_from_records(val_records, ap_scores)
             scored_ap = score_preds(ap_preds, val_seqs, args.split_dir)
             ov = scored_thr["overall"]
             ap_ov = scored_ap["overall"]

@@ -76,7 +76,7 @@ This bounds rejection only; GT not used in deployable inference.
 | D2 (G1 logistic gate) | **0.572** | 0.319 | **0.409** | 0.269 | 4875 | 3645 | 10417 | **0.390** | **0.010** |
 | D3 (G2 ExtraTrees gate) | 0.421 | 0.264 | 0.325 | 0.269 | 4044 | 5560 | 11248 | 0.353 | 0.046 |
 
-**AP ranking unchanged by threshold/gate strategy** (identical AP@0.5 across D0–D3; continuous Top-1 scores retained for AP).
+> **Historical AP caveat:** D0–D3 AP comparisons in this original run used the **base P1 score for all methods**. Those AP values must **not** be used to compare gates. Thresholded precision / recall / F1 / TP / FP / FN remain valid. Final sealed AP is reported separately from the frozen submission runtime (`docs/runs/2026-09-08_FINAL_SEALED_TEST.md`). The CV script now ranks AP with each method’s continuous score (gate probability for D2/D3); that fix was not back-applied by re-running five-fold CV.
 
 TII official ↔ local evaluator: parity OK on all folds/methods.
 
