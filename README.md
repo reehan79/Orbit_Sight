@@ -31,11 +31,13 @@ Experimentally evaluated and **rejected for deployment**:
 
 No post-test tuning. No novelty claims beyond measured components that earned their place.
 
-Production entrypoint:
+Production entrypoint (participation **SparseSight-SSA**):
 
 ```text
 python -m orbitsight.submission --dataset /OrbitSight_dataset --work /work
 ```
+
+Default output: `/work/SparseSight-SSA/<DDMMYYYY>/<sequence>_bb_windows_40ms.txt`
 
 See [`docs/FINAL_MODEL_FREEZE.md`](docs/FINAL_MODEL_FREEZE.md),
 [`docs/SUBMISSION_RUNTIME.md`](docs/SUBMISSION_RUNTIME.md), and

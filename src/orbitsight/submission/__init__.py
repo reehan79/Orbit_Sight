@@ -22,7 +22,7 @@ from orbitsight.inference.p1_detector import (
 )
 from orbitsight.inference.windows import WINDOW_US, enumerate_challenge_windows
 
-DEFAULT_TEAM = "OrbitSight"
+DEFAULT_TEAM = "SparseSight-SSA"
 EVENT_STEM = re.compile(r"^(.+)_labeled_events\.npy$")
 
 

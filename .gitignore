@@ -13,6 +13,7 @@ OrbitSight_Dataset/
 outputs/
 results/
 artifacts/
+release/
 scoreboard.local.csv
 
 # IDE / OS

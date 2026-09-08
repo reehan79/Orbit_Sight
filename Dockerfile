@@ -4,7 +4,7 @@ FROM python:3.11.9-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    ORBITSIGHT_TEAM_NAME=OrbitSight \
+    ORBITSIGHT_TEAM_NAME=SparseSight-SSA \
     ORBITSIGHT_DATASET=/OrbitSight_dataset \
     ORBITSIGHT_WORK=/work \
     ORBITSIGHT_MODEL_DIR=/models/final

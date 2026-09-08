@@ -55,7 +55,7 @@ def compare_dirs(a: Path, b: Path, atol: float = 1e-12) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--image", default="orbitsight-final:latest")
+    parser.add_argument("--image", default="sparsesight-ssa:phase1-final")
     parser.add_argument(
         "--dataset",
         type=Path,
@@ -63,7 +63,7 @@ def main() -> None:
             r"D:\OrbitSight_SSA_Challenge\OrbitSight_SSA_Challenge\Phase_1\OrbitSight_Dataset\Training_sets"
         ),
     )
-    parser.add_argument("--team", default="OrbitSight")
+    parser.add_argument("--team", default="SparseSight-SSA")
     parser.add_argument("--day", default="08092026")
     args = parser.parse_args()
 

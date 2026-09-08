@@ -1,7 +1,7 @@
 # SUBMISSION CHECKLIST
 
 Branch: `submission/final-freeze`  
-Team output path: `/work/OrbitSight/<DDMMYYYY>/`
+Team output path: `/work/SparseSight-SSA/<DDMMYYYY>/`
 
 ## Freeze / science
 

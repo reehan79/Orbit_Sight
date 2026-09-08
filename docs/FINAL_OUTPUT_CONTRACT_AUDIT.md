@@ -91,7 +91,7 @@ Organizer (README):
 
 Current runtime:
 
-`/work/<ORBITSIGHT_TEAM_NAME>/<DDMMYYYY>/` (default team `OrbitSight`)
+`/work/<ORBITSIGHT_TEAM_NAME>/<DDMMYYYY>/` (default team `SparseSight-SSA`)
 
 **PASS** for path shape.
 

@@ -2,6 +2,7 @@
 """Organizer evaluate.py round-trip on a Training_sets sequence copy (not Testing_sets)."""
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -16,6 +17,7 @@ TRAIN = Path(
     r"D:\OrbitSight_SSA_Challenge\OrbitSight_SSA_Challenge\Phase_1\OrbitSight_Dataset\Training_sets"
 )
 SEQ = "DVX_NOAA6_11416_2025-01-20-19-06-31"
+_EVAL_ENV = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
 
 
 def main() -> int:
@@ -42,13 +44,13 @@ def main() -> int:
             "--model-dir",
             str(ROOT / "models" / "final"),
             "--team",
-            "OrbitSight",
+            "SparseSight-SSA",
             "--day",
             "08092026",
         ]
         print("RUN", " ".join(cmd), flush=True)
         subprocess.run(cmd, check=True, cwd=str(ROOT))
-        out = work / "OrbitSight" / "08092026"
+        out = work / "SparseSight-SSA" / "08092026"
         pred = out / f"{SEQ}_bb_windows_40ms.txt"
         assert pred.exists(), f"missing {pred}"
         header = pred.read_text(encoding="utf-8").splitlines()[0].split("\t")
@@ -80,6 +82,7 @@ def main() -> int:
             encoding="utf-8",
             errors="replace",
             cwd=str(ROOT),
+            env=_EVAL_ENV,
         )
         text = (ev.stdout or "") + (ev.stderr or "")
         print(text.encode("ascii", errors="replace").decode("ascii"), flush=True)

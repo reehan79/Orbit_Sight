@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,9 @@ import pytest
 EVAL = Path(
     r"D:\OrbitSight_SSA_Challenge\OrbitSight_SSA_Challenge\Phase_1\OrbitSight_DataLoader\evaluate.py"
 )
+
+# Organizer evaluate.py prints Unicode arrows; force UTF-8 on Windows consoles (cp1252).
+_EVAL_ENV = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
 
 PRED_HEADER = (
     "window_start_timestamp_us\twindow_end_timestamp_us\t"
@@ -51,6 +55,7 @@ def test_organizer_evaluate_accepts_bb_windows_filename():
             text=True,
             encoding="utf-8",
             errors="replace",
+            env=_EVAL_ENV,
         )
         text = (r.stdout or "") + (r.stderr or "")
         assert r.returncode == 0
@@ -85,6 +90,7 @@ def test_organizer_evaluate_rejects_pred_txt_filename():
             text=True,
             encoding="utf-8",
             errors="replace",
+            env=_EVAL_ENV,
         )
         text = (r.stdout or "") + (r.stderr or "")
         assert "Missing prediction for: SYNTH_SEQ_bb_windows_40ms.txt" in text
@@ -132,6 +138,6 @@ def test_work_output_path_contract():
     import tempfile
 
     with tempfile.TemporaryDirectory() as td:
-        out = output_dir(Path(td), team_name="OrbitSight", day="08092026")
-        assert out == Path(td) / "OrbitSight" / "08092026"
+        out = output_dir(Path(td), team_name="SparseSight-SSA", day="08092026")
+        assert out == Path(td) / "SparseSight-SSA" / "08092026"
         assert out.is_dir()
