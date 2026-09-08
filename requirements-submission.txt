@@ -1,0 +1,5 @@
+# OrbitSight final submission — pinned to the final-training environment
+numpy==1.26.4
+scikit-learn==1.8.0
+joblib==1.5.3
+scipy==1.13.1

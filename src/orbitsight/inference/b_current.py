@@ -21,7 +21,7 @@ from orbitsight.features import (
 )
 from orbitsight.features.candidate_features_fast import extract_candidate_features_fast
 from orbitsight.features.local_geometry import roi_mask
-from orbitsight.models import RankerBundle, score_ranker
+from orbitsight.models.candidate_ranker import RankerBundle, score_ranker
 from orbitsight.proposals import Candidate, RawGridProposer, infer_sensor_geometry
 
 PRIOR_MS = 80

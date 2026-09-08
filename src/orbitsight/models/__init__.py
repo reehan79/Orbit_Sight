@@ -5,7 +5,14 @@ from .candidate_ranker import (
     fit_rankers,
     score_ranker,
 )
-from .foveated_refiner import TinyFoveatedRefiner, parameter_count
+
+# TinyFoveatedRefiner requires torch; keep optional so submission/CPU images
+# do not import torch at package load time.
+try:
+    from .foveated_refiner import TinyFoveatedRefiner, parameter_count
+except ImportError:  # pragma: no cover - torch optional for deploy
+    TinyFoveatedRefiner = None  # type: ignore[misc, assignment]
+    parameter_count = None  # type: ignore[misc, assignment]
 
 __all__ = [
     "FEATURE_COLUMNS",
