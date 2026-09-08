@@ -1,0 +1,9 @@
+{
+  "d2_threshold": 0.848222565945547,
+  "selection": "TII detection F1 on sequence-level inner-OOF gate scores (Training_sets only)",
+  "n_oof_windows": 104787,
+  "train_oof_f1": 0.41603323316245366,
+  "train_oof_precision": 0.6416303162486369,
+  "train_oof_recall": 0.3078080041851949,
+  "train_oof_empty_fpr": 0.008279607137669419
+}
