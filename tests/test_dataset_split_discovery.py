@@ -37,8 +37,20 @@ def test_training_sets_only_when_no_testing(tmp_path: Path):
     assert resolve_split_dir(tmp_path) == (tmp_path / "Training_sets").resolve()
 
 
+def test_split_mode_both_lists_training_then_testing(tmp_path: Path):
+    from orbitsight.submission import list_sequence_jobs
+
+    _touch_npy(tmp_path / "Training_sets" / "a_labeled_events.npy")
+    _touch_npy(tmp_path / "Testing_sets" / "b_labeled_events.npy")
+    jobs = list_sequence_jobs(tmp_path, split_mode="both")
+    assert [j.sequence for j in jobs] == ["a", "b"]
+    assert jobs[0].label == "Training"
+    assert jobs[1].label == "Testing"
+
+
 def test_unexpected_nested_layout_fails(tmp_path: Path):
     weird = tmp_path / "Other" / "x_labeled_events.npy"
     _touch_npy(weird)
     with pytest.raises(FileNotFoundError):
         discover_sequences(tmp_path)
+

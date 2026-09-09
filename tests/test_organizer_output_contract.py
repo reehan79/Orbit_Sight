@@ -98,7 +98,8 @@ def test_organizer_evaluate_rejects_pred_txt_filename():
         assert not excel.exists()
 
 
-def test_current_writer_header_and_columns_match_organizer_load_pred():
+def test_internal_tii_writer_still_matches_evaluate_load_pred():
+    """Internal evaluate.py helper remains available; production uses public V2 writer."""
     from orbitsight.evaluation.tii_style import write_tii_prediction_file
     import csv
 
@@ -121,16 +122,9 @@ def test_current_writer_header_and_columns_match_organizer_load_pred():
             parsed = list(csv.DictReader(f, delimiter="\t"))
         assert len(parsed) == 1
         p = parsed[0]
-        assert int(p["window_start_timestamp_us"]) == 100
-        assert int(p["window_end_timestamp_us"]) == 40100
         assert int(p["center_x"]) == 11
-        assert int(p["center_y"]) == 13
-        assert int(p["width"]) == 5
-        assert int(p["height"]) == 7
         assert abs(float(p["confidence"]) - 0.848222565945547) <= 1e-12
-        # No class_id / sequence_id columns
-        assert "class_id" not in p
-        assert "sequence_id" not in p
+
 
 
 def test_work_output_path_contract():

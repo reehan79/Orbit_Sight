@@ -37,7 +37,9 @@ Production entrypoint (participation **SparseSight-SSA**):
 python -m orbitsight.submission --dataset /OrbitSight_dataset --work /work
 ```
 
-Default output: `/work/SparseSight-SSA/<DDMMYYYY>/<sequence>_bb_windows_40ms.txt`
+Default output: `/work/SparseSight-SSA/<DDMMYYYY>/<sequence>_pred.txt` (+ `Evaluation_Metrics.xlsx`)
+
+See `docs/OFFICIAL_OUTPUT_CONTRACT_V2.md`.
 
 See [`docs/FINAL_MODEL_FREEZE.md`](docs/FINAL_MODEL_FREEZE.md),
 [`docs/SUBMISSION_RUNTIME.md`](docs/SUBMISSION_RUNTIME.md), and

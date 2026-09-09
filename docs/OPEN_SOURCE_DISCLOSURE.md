@@ -13,6 +13,7 @@ readily available in this environment, marked **VERIFY**.
 | scikit-learn | 1.8.0 | BSD-3-Clause (`License-Expression`) | ExtraTrees + LogisticRegression + StandardScaler |
 | joblib | 1.5.3 | BSD-3-Clause (`License-Expression`) | Model serialization load |
 | scipy | 1.13.1 | BSD License (OSI classifier) | Transitive scientific dependency of scikit-learn |
+| openpyxl | 3.1.5 | MIT (`License` metadata) | Write `Evaluation_Metrics.xlsx` post-inference |
 
 ## Not bundled in final image
 

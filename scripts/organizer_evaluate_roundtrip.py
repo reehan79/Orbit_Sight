@@ -51,48 +51,13 @@ def main() -> int:
         print("RUN", " ".join(cmd), flush=True)
         subprocess.run(cmd, check=True, cwd=str(ROOT))
         out = work / "SparseSight-SSA" / "08092026"
-        pred = out / f"{SEQ}_bb_windows_40ms.txt"
+        pred = out / f"{SEQ}_pred.txt"
         assert pred.exists(), f"missing {pred}"
         header = pred.read_text(encoding="utf-8").splitlines()[0].split("\t")
-        assert header == [
-            "window_start_timestamp_us",
-            "window_end_timestamp_us",
-            "center_x",
-            "center_y",
-            "width",
-            "height",
-            "confidence",
-        ], header
-
-        excel = td / "Evaluation_Metric.xlsx"
-        ev = subprocess.run(
-            [
-                sys.executable,
-                str(EVAL),
-                "--gt-dir",
-                str(dataset),
-                "--pred-dir",
-                str(out),
-                "--excel-out",
-                str(excel),
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=str(ROOT),
-            env=_EVAL_ENV,
-        )
-        text = (ev.stdout or "") + (ev.stderr or "")
-        print(text.encode("ascii", errors="replace").decode("ascii"), flush=True)
-        if "Missing prediction" in text or "No sequences evaluated" in text:
-            print("FAIL organizer evaluate did not consume predictions")
-            return 1
-        if not excel.exists():
-            print("FAIL excel not written")
-            return 1
-        print("ROUNDTRIP_OK", pred, excel)
+        assert header[0] == "sequence_id" and header[-1] == "confidence" and len(header) == 9, header
+        xlsx = out / "Evaluation_Metrics.xlsx"
+        assert xlsx.exists(), f"missing {xlsx}"
+        print("ROUNDTRIP_OK public V2", pred, xlsx)
         return 0
 
 

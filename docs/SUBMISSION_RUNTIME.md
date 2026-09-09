@@ -1,4 +1,4 @@
-# OrbitSight submission runtime (SparseSight-SSA)
+# OrbitSight submission runtime (SparseSight-SSA) — Output Contract V2
 
 ## Frozen champion
 
@@ -7,6 +7,14 @@
 Temporal rescue is **rejected** and is not imported by this entrypoint.
 
 Default ChallengeON participation folder name: **SparseSight-SSA**.
+
+## Official public packaging (V2)
+
+See `docs/OFFICIAL_OUTPUT_CONTRACT_V2.md`.
+
+- Filename mode default: `admin_pred` → `<sequence>_pred.txt`
+- Nine public columns including `sequence_id`, `centre_x`/`centre_y`/`w`/`h`, `class_id`
+- Writes `Evaluation_Metrics.xlsx` after inference (GT read only for metrics)
 
 ## Local run
 
@@ -18,26 +26,24 @@ python -m orbitsight.submission \
   --team SparseSight-SSA
 ```
 
-Writes: `/work/SparseSight-SSA/<DDMMYYYY>/*_bb_windows_40ms.txt`
+Writes: `/work/SparseSight-SSA/<DDMMYYYY>/<sequence>_pred.txt` + `Evaluation_Metrics.xlsx`
 
 ## Docker
 
 ```bash
-docker build -t sparsesight-ssa:phase1-final .
+docker build -t sparsesight-ssa:phase1-final-v2 .
 docker run --rm --network none \
   -v /path/to/dataset:/OrbitSight_dataset:ro \
   -v /path/to/work:/work \
-  sparsesight-ssa:phase1-final
+  sparsesight-ssa:phase1-final-v2
 ```
 
 Environment defaults inside the image:
+
 - `ORBITSIGHT_DATASET=/OrbitSight_dataset`
 - `ORBITSIGHT_WORK=/work`
 - `ORBITSIGHT_MODEL_DIR=/models/final`
 - `ORBITSIGHT_TEAM_NAME=SparseSight-SSA`
-
-## Output contract (operational)
-
-- Filename: `<sequence>_bb_windows_40ms.txt` (organizer `evaluate.py` compatibility)
-- No `Evaluation_Metrics.xlsx` from inference (GT-independent; evaluator generates workbook)
-- See `docs/FINAL_SUBMISSION_DECISION.md`
+- `ORBITSIGHT_PRED_FILENAME_MODE=admin_pred`
+- `ORBITSIGHT_CLASS_ID=1`
+- `ORBITSIGHT_SPLIT_MODE=auto`
