@@ -1,0 +1,8 @@
+git_commit_sha=426c3e35be716f3ebe33436fced48fed4fae1de4
+python_version=3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]
+cpu_name=12th Gen Intel(R) Core(TM) i7-12700
+ram_gb=63.77
+os=Windows-10-10.0.26200-SP0
+numpy=1.26.4
+scipy=1.13.1
+scikit-learn=1.8.0

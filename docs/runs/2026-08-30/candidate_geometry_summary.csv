@@ -1,0 +1,4 @@
+sensor,median_gt_w,median_gt_h,cand_center_oracle_size_meanIoU,cand_center_oracle_size_IoU50,oracle_center_median_size_meanIoU,oracle_center_median_size_IoU50,cand_center_median_size_meanIoU,cand_center_median_size_IoU50
+DAVIS,9.00,9.00,0.2631,0.1493,0.4854,0.4421,0.1839,0.0353
+DVX,10.00,13.00,0.2802,0.1572,0.6370,0.7839,0.2300,0.0786
+EVK4,63.00,60.00,0.3861,0.2647,0.7130,0.8342,0.3640,0.1976

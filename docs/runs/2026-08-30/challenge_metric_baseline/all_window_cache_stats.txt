@@ -1,0 +1,5 @@
+rows=2095576
+positives=59073
+negatives=2036503
+pos_ratio=0.028189
+disk_mb=47.26

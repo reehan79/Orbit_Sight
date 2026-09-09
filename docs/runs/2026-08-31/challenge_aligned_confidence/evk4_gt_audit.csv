@@ -1,0 +1,3 @@
+gt_index,window_start_us,window_end_us,center_x,center_y,width,height,event_first_us,event_last_us,overlaps_enumerated_window,example_enum_start_us,reason
+1201,83271700,83311700,663,360,40,37,71700,83253998,False,,outside_event_span|no_enumerated_window_overlap
+1202,83311700,83351700,665,360,40,37,71700,83253998,False,,outside_event_span|no_enumerated_window_overlap

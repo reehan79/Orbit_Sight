@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Local data / outputs
+Phase_1/
+OrbitSight_Dataset/
+*.npy
+*.npz
+outputs/
+results/
+artifacts/
+release/
+scoreboard.local.csv
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

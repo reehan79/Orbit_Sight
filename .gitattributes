@@ -1,0 +1,15 @@
+# Normalize line endings for final text artifacts so SHA256 is stable across OS.
+models/final/*.json text eol=lf
+*.md text eol=lf
+*.py text eol=lf
+*.csv text eol=lf
+*.txt text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Binary model artifacts
+models/final/*.joblib binary
+*.npy binary
+*.npz binary
+*.xlsx binary

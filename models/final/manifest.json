@@ -1,0 +1,89 @@
+{
+  "name": "OrbitSight final D2 freeze",
+  "version": "final-d2-v1",
+  "date_utc": "2026-09-07T22:26:29Z",
+  "git_sha": "382c70ee80975b566bbfab8cc4916567e64e32c1",
+  "architecture": {
+    "proposals": "RawGridProposer Top-20",
+    "confidence": "ExtraTreesClassifier",
+    "centre": "C4_MEDIAN (S2 features at C1)",
+    "size": "S2 ExtraTreesRegressor",
+    "gate": "D2 StandardScaler + LogisticRegression",
+    "path": "TRUE P1 + parity-preserving geometry reuse"
+  },
+  "hyperparameters": {
+    "confidence": {
+      "n_estimators": 64,
+      "max_depth": 14,
+      "min_samples_leaf": 12,
+      "max_features": null,
+      "class_weight": "balanced",
+      "random_state": 42,
+      "n_jobs": 1
+    },
+    "size_s2": {
+      "n_estimators": 32,
+      "max_depth": 12,
+      "min_samples_leaf": 24,
+      "max_features": null,
+      "random_state": 42,
+      "n_jobs": 1
+    },
+    "d2_gate": {
+      "C": 1.0,
+      "class_weight": "balanced",
+      "max_iter": 1000,
+      "random_state": 42,
+      "scaler": "StandardScaler"
+    },
+    "inner_oof": {
+      "kfold_shuffle": true,
+      "random_state": 42,
+      "max_splits": 5
+    }
+  },
+  "seeds": {
+    "random_state": 42
+  },
+  "d2_threshold": 0.848222565945547,
+  "training_sequences": [
+    "2025_12_23_21_12_28_EVK4_mag5.2",
+    "DAVIS_COSMOS1933_18958_2024-12-04-18-37-01",
+    "DAVIS_EGS_16908_2024-11-01-19-10-44",
+    "DAVIS_Filtered_NOAA6_11416_2025-01-13-19-51-06",
+    "DAVIS_RESURSDK1_29228_2024-12-04-18-37-01",
+    "DAVIS_SL12RB2_15772_2024-12-04-18-21-37",
+    "DAVIS_SL16RB_20625_2024-12-04-19-34-18",
+    "DAVIS_SL16RB_26070_2024-12-04-19-14-39",
+    "DAVIS_SL8RB_2025-01-13-19-15-36",
+    "DVX_Filtered_ACS3_59588_2025-01-20-19-35-44",
+    "DVX_Filtered_BlockDM_SLRB_32405_2025-01-20-19-57-17",
+    "DVX_Filtered_NOAA15_25338_2025-01-20-19-25-07",
+    "DVX_Filtered_NOAA16_26536_2025-01-20-19-46-50",
+    "DVX_Filtered_NOAA6_11416_2025-01-20-19-11-35",
+    "DVX_Filtered_Stars2_2025-01-20-19-57-17",
+    "DVX_Filtered_Stars_2025-01-20-19-15-10",
+    "DVX_NOAA6_11416_2025-01-20-19-06-31"
+  ],
+  "n_training_sequences": 17,
+  "split_dir": "D:\\OrbitSight_SSA_Challenge\\OrbitSight_SSA_Challenge\\Phase_1\\OrbitSight_Dataset\\Training_sets",
+  "artifacts": {
+    "cache": "D:\\Projects\\Orbit_Sight\\artifacts\\all_window_candidates.npz",
+    "table": "D:\\Projects\\Orbit_Sight\\artifacts\\candidate_table.csv"
+  },
+  "files": {
+    "confidence_extratrees.joblib": "91267d192baf5fc146acd7f0ceefe8c3563798fa941e97d623d1b380104fa2dc",
+    "size_s2_extratrees.joblib": "79e65e6848425adda6d9f00da795d4a52a6a6fe7c3dbe6f84084d5f4a5fb0238",
+    "d2_gate_scaler.joblib": "43339633fdb9eb37faccf1c08211c1e4b359cb8090ace7b1377479fdebb8b9c1",
+    "d2_gate_logistic.joblib": "0d39234a43691295e24747462cf2427d1df9a322d9bdab77278ecb01b16b58b9",
+    "d2_threshold.json": "009d96413448d98ada17d3e9884d62343294fb166b34db3dedbb420d94ab1da4",
+    "feature_names.json": "7099fbd8e95857cb6cfc84e4d5b688058d7ed530bf296c7e05ecd21c4fbfab5d"
+  },
+  "notes": [
+    "Temporal rescue rejected for deployment; not included.",
+    "Threshold selected on Training_sets OOF only; Testing_sets never used.",
+    "Gate fit uses accumulated inner-train OOF rows (identical to CV deploy fit)."
+  ],
+  "n_gate_fit_windows": 419148,
+  "n_inner_train_gate_rows_accumulated": 419148
+}

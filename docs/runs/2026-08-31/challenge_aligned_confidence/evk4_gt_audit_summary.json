@@ -1,0 +1,10 @@
+{
+  "sequence": "2025_12_23_21_12_28_EVK4_mag5.2",
+  "total_gt_boxes": 1203,
+  "gt_in_enumerated_windows": 1201,
+  "unassigned_gt_boxes": 2,
+  "enumerated_windows": 2080,
+  "event_first_us": 71700,
+  "event_last_us": 83253998,
+  "enumeration_rule": "np.arange(t0, t1, 40000) half-open [ws, ws+40000)"
+}

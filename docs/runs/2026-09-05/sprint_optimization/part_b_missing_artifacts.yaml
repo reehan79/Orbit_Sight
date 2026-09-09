@@ -1,0 +1,11 @@
+missing_artifacts:
+  - unthresholded_p1_top1_boxes_per_outer_val_window
+  - paired_base_confidence_and_d2_gate_probability_per_box
+  - fitted_d2_gate_model_pickles
+  - gate_feature_matrices_for_val_windows
+present_artifacts:
+  - docs/runs/2026-08-31/challenge_aligned_confidence/tii_fold*_D2.xlsx (thresholded; confidence already gate score)
+  - docs/runs/2026-08-31/challenge_aligned_confidence/compare_by_fold.csv (D2 AP from base-score ranking)
+  - docs/runs/2026-08-31/challenge_aligned_confidence/threshold_stability.csv (D2_G1 thresholds)
+action: STOP_NO_REBUILD
+reason: Part B forbids multi-hour re-inference when gate scores were not persisted
