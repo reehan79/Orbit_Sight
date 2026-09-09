@@ -136,3 +136,20 @@ ORBITSIGHT_SPLIT_MODE=auto
 ```
 
 Docker tag for this contract: `sparsesight-ssa:phase1-final-v2`
+
+## V2 release evidence (local)
+
+```
+V2_RELEASE_STATUS=PASS
+GIT_SHA=d203db9a9e38f0971de080919418efe478c11092
+DOCKER_TAG=sparsesight-ssa:phase1-final-v2
+DOCKER_IMAGE_ID=sha256:98bd3470cf1c4b3e15de954a096ed7904f169fe4585ad725b42dd90dc758442c
+PREDICTION_FILENAME_MODE=admin_pred
+PREDICTION_FILENAME_PATTERN=<sequence>_pred.txt
+CLASS_ID=1
+METRICS_XLSX=Evaluation_Metrics.xlsx
+PYTEST=PASS (56)
+OFFLINE_SMOKE=PASS
+GT_LEAKAGE_TEST=PASS
+```
+
